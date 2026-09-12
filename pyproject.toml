@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "image-similarity-benchmark"
+version = "0.1.0"
+description = "Pairwise image similarity benchmark (SSIM, LPIPS, silhouette IoU, edge similarity) with a weighted 0-100 score."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+  "numpy>=1.26,<3",
+  "Pillow>=10.0",
+  "scikit-image>=0.22",
+  "opencv-python-headless>=4.8",
+  "PyYAML>=6.0",
+  "matplotlib>=3.8",
+  "torch>=2.1",
+  "torchvision>=0.16",
+  "lpips>=0.1.4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4"]
+
+[project.scripts]
+image-similarity-benchmark = "src.cli:main"
+
+[tool.setuptools]
+packages = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q"
+filterwarnings = [
+  "ignore::DeprecationWarning",
+  "ignore::UserWarning",
+]

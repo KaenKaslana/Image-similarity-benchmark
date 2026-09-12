@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Benchmark outputs (keep the folder, ignore run directories)
+outputs/run_*/
+
+# Editors / OS
+.vscode/*
+!.vscode/settings.json
+.idea/
+Thumbs.db
+.DS_Store
+
+# Sample / user images (regenerate with: python scripts/make_sample_data.py)
+data/reference/*
+data/candidate/*
+!data/reference/.gitkeep
+!data/candidate/.gitkeep

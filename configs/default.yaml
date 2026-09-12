@@ -1,0 +1,128 @@
+# Default configuration for the image similarity benchmark.
+#
+# Every key here can be overridden by passing a different YAML file with
+# `--config`. Unknown keys raise an error so typos are caught early.
+
+# ---------------------------------------------------------------------------
+# Input handling
+# ---------------------------------------------------------------------------
+input:
+  # Accepted file extensions (case-insensitive).
+  extensions: [".png", ".jpg", ".jpeg"]
+  # When false (default) the run aborts if any reference or candidate image
+  # has no partner with the same (case-insensitive) file name.
+  # When true, unmatched files are logged and skipped.
+  skip_unmatched: false
+
+# ---------------------------------------------------------------------------
+# Preprocessing (applied identically to reference and candidate images)
+# ---------------------------------------------------------------------------
+preprocessing:
+  # Output canvas size in pixels. Images are resized to fit while keeping
+  # aspect ratio, then centred on the canvas. They are never stretched.
+  canvas_size: 512
+  # RGB value used to composite transparent pixels and to pad the canvas.
+  background_color: [255, 255, 255]
+  # Crop mode:  none | center_crop | foreground_bbox
+  #   none            - use the whole image
+  #   center_crop     - crop the largest centred square
+  #   foreground_bbox - crop to the bounding box of the foreground mask and
+  #                     centre the object with `foreground_padding` margin
+  crop_mode: none
+  # Fraction of the object's bounding-box size to keep as padding around it
+  # (only used by foreground_bbox). 0.1 == 10 % on each side.
+  foreground_padding: 0.10
+  # Foreground mask source used for foreground_bbox and for silhouette IoU:
+  #   alpha       - only use the alpha channel; if absent no mask is available
+  #   auto        - use alpha if present, else threshold against the background
+  #                 colour (see mask_background_threshold)
+  #   background  - always threshold against the background colour
+  mask_mode: auto
+  # Alpha values >= this (0-255) count as foreground.
+  alpha_threshold: 16
+  # Max per-channel colour distance (0-255) from `background_color` for a
+  # pixel to be treated as background when thresholding.
+  mask_background_threshold: 12
+  # Minimum fraction of foreground pixels needed for a thresholded mask to be
+  # considered reliable. Below this the silhouette metric is not_available.
+  mask_min_foreground_fraction: 0.001
+  # Maximum foreground fraction for a thresholded mask to be reliable. A
+  # photo with no plain background thresholds to ~100 % foreground, which
+  # would give a meaningless IoU of ~1, so such masks are rejected.
+  # (Alpha-channel masks are always considered reliable.)
+  mask_max_foreground_fraction: 0.98
+  # Resampling filter for resize: lanczos | bicubic | bilinear
+  resample: lanczos
+  # Translation alignment of the candidate onto the reference before scoring,
+  # so that WHERE the object sits in the frame does not affect the score:
+  #   none              - compare images as they are (position differences cost points)
+  #   centroid          - align foreground centroids
+  #   phase_correlation - content-based (OpenCV phase correlation); robust to a
+  #                       missing/extra part. Recommended.
+  # Only translation is corrected (no scaling / rotation). The applied shift is
+  # written to metrics.json as `alignment`.
+  alignment: phase_correlation
+  # Estimated shifts larger than this fraction of the canvas are treated as
+  # unreliable and ignored.
+  alignment_max_shift: 0.5
+
+# ---------------------------------------------------------------------------
+# Metrics
+# ---------------------------------------------------------------------------
+metrics:
+  ssim:
+    # Gaussian-weighted SSIM window (as in Wang et al. 2004).
+    gaussian_weights: true
+    sigma: 1.5
+    # Window size in pixels (odd). Only used when gaussian_weights is false.
+    win_size: 7
+  lpips:
+    # Backbone: alex | vgg | squeeze
+    net: alex
+    # Device: auto | cuda | cpu
+    device: auto
+  edge:
+    canny_low: 100
+    canny_high: 200
+    # Gaussian blur kernel size applied before Canny (0 disables).
+    blur_kernel: 3
+    # Distance (in pixels, scaled to the canvas) at which an edge pixel is
+    # considered "completely wrong". Chamfer distances are normalised by this
+    # value, so the score is 100 when every edge pixel has a match at
+    # distance 0 and 0 when all edges are >= this far apart.
+    max_distance: 20.0
+    # Fraction of pixels that must be edges in at least one image for the
+    # metric to be meaningful; below this the edge score is not_available.
+    min_edge_fraction: 0.0005
+
+# ---------------------------------------------------------------------------
+# Scoring
+# ---------------------------------------------------------------------------
+# Weights must be >= 0 and sum to 1.0 (tolerance 1e-6). If a metric is not
+# available for a pair, the remaining weights are renormalised for that pair.
+weights:
+  lpips: 0.40
+  ssim: 0.30
+  silhouette: 0.20
+  edge: 0.10
+
+# ---------------------------------------------------------------------------
+# Output
+# ---------------------------------------------------------------------------
+output:
+  # Save the preprocessed images so they can be inspected manually.
+  save_preprocessed: true
+  # Save a per-pair comparison image (reference | candidate | difference).
+  save_comparisons: true
+  # Save a summary report.png. Pairs per page for the multi-page report.
+  report_pairs_per_page: 6
+  # Logging level: DEBUG | INFO | WARNING | ERROR
+  log_level: INFO
+  # When several objects are benchmarked in one run, name the files
+  # <object><separator><view>.png (e.g. mug_front.png, mug_side.png ...).
+  # Pairs whose name contains the separator are averaged per object into
+  # `group_scores`. Empty string disables grouping.
+  group_separator: "_"
+  # Reports: with grouped names each object gets its own report_<object>.png
+  # (one row per view) and report.png becomes a one-page score table.
+  # Without groups (plain front.png / side.png ...), report.png shows the views.
