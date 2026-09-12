@@ -120,6 +120,20 @@ def test_too_large_shift_is_rejected() -> None:
     assert out is cand and not info.applied and "exceeds" in info.note
 
 
+def test_shift_that_reduces_overlap_is_not_applied(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If the estimated shift would make the foregrounds overlap less (typical
+    for two unrelated objects), the candidate must be left untouched."""
+    import src.alignment as al
+
+    cfg = _cfg(alignment="phase_correlation")
+    ref = preprocess_pil(draw_shape(64, "square", seed=None), cfg)
+    cand = preprocess_pil(draw_shape(64, "square", seed=None), cfg)  # already aligned
+    monkeypatch.setattr(al, "estimate_shift_phase_correlation", lambda a, b: ((25.0, 0.0), 0.9))
+    out, info = al.align_candidate(ref, cand, cfg)
+    assert out is cand and not info.applied and "reduce overlap" in info.note
+    assert info.shift_px == (25, 0)  # the estimate is still reported
+
+
 def test_alignment_config_validation() -> None:
     with pytest.raises(ConfigError, match="alignment must be one of"):
         config_from_dict({"preprocessing": {"alignment": "magic"}})

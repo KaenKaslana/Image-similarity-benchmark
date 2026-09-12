@@ -166,7 +166,7 @@ data/reference/lamp_front.png  data/candidate/lamp_front.png
 | `bottle` | 瓶颈更细更高 | front / side 中等下降；top 只有瓶盖圆略有变化 |
 | `house` | 屋顶换色 + 加了烟囱 | 三个视角 LPIPS / SSIM 都下降；轮廓只在 front / side 略降 |
 | `lamp` | 同一物体，整体平移 (5 %, 3 %) | 默认对齐后 IoU 0.97、物体分 95.8，位置偏差不扣分；`--alignment none` 时降到 72，说明对齐的作用 |
-| `mismatch` | reference 是椅子，candidate 是台灯（两个完全不同的物体） | front / side 的 IoU 只有 0.3 和 0.05，Edge、LPIPS 都很差，是分数最低的一组；但 top 视角两者都是居中的一团（椅面 vs 灯罩），IoU 仍有 0.75，说明单看俯视图分不清物体，多视角一起看才可靠 |
+| `mismatch` | reference 是椅子，candidate 是台灯（两个完全不同的物体） | front / side 的 IoU 只有 0.3 左右，Edge、LPIPS 都很差，是分数最低的一组（69）；但 top 视角两者都是居中的一团（椅面 vs 灯罩），IoU 仍有 0.75，说明单看俯视图分不清物体，多视角一起看才可靠 |
 
 报告按物体组织：**每个物体一张 `report_<物体>.png`**，三行分别是 front / side / top 的 reference、candidate、差异图和指标，
 标题是该物体的分数和各视角分数；`report.png` 是一页汇总表（物体 × 视角分数、物体分数、总分），不再重复堆放所有图片。
@@ -280,7 +280,7 @@ reference 与 candidate 使用**完全相同**的规则：
 | `centroid` | 对齐前景质心；简单，但局部形状变化会把质心拉偏 |
 | `none` | 不对齐，位置偏差会被当成误差扣分 |
 
-对齐用的前景信号：两张图都有可靠 mask 时用 mask，否则用「与背景色的距离」。估计的偏移超过 `alignment_max_shift`（默认画布的 50 %）时视为不可靠，不做对齐并给出警告。
+对齐用的前景信号：两张图都有可靠 mask 时用 mask，否则用「与背景色的距离」。两种情况下估计的偏移会被拒绝、图片保持不动：偏移超过 `alignment_max_shift`（默认画布的 50 %），或者移动后前景重叠反而变小（两个不相干的物体常常如此）。拒绝的偏移仍会记录在 `alignment` 字段里（`applied: false`）。
 对齐只解决二维平移；相机角度不同造成的透视差异，二维对齐无法弥补。
 
 前景 mask 来源（`mask_mode`）：

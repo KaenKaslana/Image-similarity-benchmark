@@ -172,5 +172,29 @@ def align_candidate(
     if dx == 0 and dy == 0:
         return cand, AlignmentInfo(method, (0, 0), (0.0, 0.0), response, signal_name, True, "already aligned")
 
+    # Sanity check: only apply the shift if it actually increases the overlap of
+    # the foreground signals. For two unrelated objects the estimate can be a
+    # large, meaningless shift that would make things worse.
+    overlap_before = _overlap(sig_ref, sig_cand)
+    overlap_after = _overlap(sig_ref, _shift_signal(sig_cand, dx, dy))
+    if overlap_after < overlap_before:
+        note = f"shift ({dx}, {dy}) would reduce overlap ({overlap_before:.3f} -> {overlap_after:.3f}); not applied"
+        logger.info("%s: %s", ref.meta.get("name", "<pair>"), note)
+        return cand, AlignmentInfo(method, (dx, dy), frac, response, signal_name, False, note)
+
     logger.debug("%s: aligning candidate by (%d, %d) px via %s", ref.meta.get("name", "<pair>"), dx, dy, method)
     return translate_image(cand, dx, dy, cfg.background_color), AlignmentInfo(method, (dx, dy), frac, response, signal_name, True)
+
+
+def _shift_signal(signal: np.ndarray, dx: int, dy: int) -> np.ndarray:
+    matrix = np.array([[1.0, 0.0, float(dx)], [0.0, 1.0, float(dy)]], dtype=np.float32)
+    h, w = signal.shape
+    return cv2.warpAffine(signal, matrix, (w, h), flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+
+
+def _overlap(a: np.ndarray, b: np.ndarray) -> float:
+    """Normalised overlap of two non-negative signals (1 = identical, 0 = disjoint)."""
+    denom = float(np.sqrt((a * a).sum() * (b * b).sum()))
+    if denom <= 0:
+        return 0.0
+    return float((a * b).sum() / denom)
