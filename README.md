@@ -25,15 +25,16 @@ reference/top.png   <-> candidate/top.png
 2. [快速开始](#快速开始)
 3. [CLI 用法](#cli-用法)
 4. [三维模型对比](#三维模型对比)
-5. [输入要求](#输入要求)
-6. [预处理流程](#预处理流程)
-7. [指标说明](#指标说明)
-8. [分数计算](#分数计算)
-9. [输出文件](#输出文件)
-10. [配置文件](#配置文件)
-11. [测试](#测试)
-12. [重要说明与局限性](#重要说明与局限性)
-13. [项目结构](#项目结构)
+5. [AI 复刻模型并打分](#ai-复刻模型并打分)
+6. [输入要求](#输入要求)
+7. [预处理流程](#预处理流程)
+8. [指标说明](#指标说明)
+9. [分数计算](#分数计算)
+10. [输出文件](#输出文件)
+11. [配置文件](#配置文件)
+12. [测试](#测试)
+13. [重要说明与局限性](#重要说明与局限性)
+14. [项目结构](#项目结构)
 
 ---
 
@@ -293,8 +294,13 @@ python -m src.cli fetch-sketchfab https://sketchfab.com/3d-models/coffee-mug-<ui
 | `--style` | shaded | `shaded` 或 `silhouette` |
 
 **朝向是最容易出错的地方**：两个模型如果「正面」定义不一致（一个 +Z 朝前、一个 -Y 朝前），即使模型一样分数也会很低。
-先用 `render-views` 分别看一眼三视图，再调整 `--up` / `--front`（目前两个模型共用同一组参数；不一致时可先分别用
-`render-views` 渲染到两个文件夹，再用 `compare` 比较）。
+三种处理方式：
+
+* `--auto-orient`：枚举 candidate 的全部 24 种轴对齐朝向，渲染低分辨率剪影，选与 reference 三视图 IoU 平均值最高的那一种。
+  选中的朝向和前几名的 IoU 写在 `models.json` 的 `candidate.auto_orient` 里。只处理 90° 的旋转，不处理任意角度倾斜和镜像。
+  实测：把一把椅子绕 X、Z 各转 90° 后直接比较只有 63.8 分，加 `--auto-orient` 后恢复到 100 分。
+* `--candidate-up` / `--candidate-front`：手动为 candidate 指定与 reference 不同的轴。
+* 先用 `render-views` 分别看一眼三视图，再决定参数。
 
 ### 从 Sketchfab 读取模型
 
@@ -319,6 +325,58 @@ python -m src.cli fetch-sketchfab https://sketchfab.com/3d-models/coffee-mug-<ui
   这部分由于需要真实账号，只在单元测试里用模拟的 HTTP 服务验证过。
 * macOS 自带的 python.org 安装版可能缺少根证书，出现 `CERTIFICATE_VERIFY_FAILED` 时运行
   `/Applications/Python 3.x/Install Certificates.command`，或 `export SSL_CERT_FILE=$(python3 -m certifi)`。
+
+---
+
+## AI 复刻模型并打分
+
+`reproduce` 命令完成整条链路：取一个参考模型（本地文件或 Sketchfab）→ 渲染一张图交给 AI 图生 3D 服务（或改用文字提示词）
+→ 下载 AI 生成的模型 → 自动对齐朝向 → 三视图打分。
+
+```powershell
+# 用参考模型的 3/4 视角渲染图做图生 3D（Meshy）
+$env:MESHY_API_KEY = "..."
+python -m src.cli reproduce --reference https://sketchfab.com/3d-models/victorian-chair-6479a1900b614b59b26784c3a7922eb3
+
+# 改用文字提示词（文生 3D）
+python -m src.cli reproduce --reference models/chair.glb --prompt "a victorian wooden dining chair with carved back"
+
+# 用 Tripo
+python -m src.cli reproduce --reference models/chair.glb --provider tripo --api-key ...
+
+# 已经用别的工具（网页版 Meshy / Tripo / Hunyuan3D / TRELLIS ...）生成好了模型：跳过生成，只做对齐 + 打分
+python -m src.cli reproduce --reference models/chair.glb --candidate downloads/ai_chair.glb
+
+# 只调用生成，不打分
+python -m src.cli generate-model --provider meshy --image renders/chair/iso.png
+python -m src.cli generate-model --provider tripo --prompt "a coffee mug"
+```
+
+输出目录 `outputs/run_*/` 除了常规文件还有：
+
+* `generation/hero_iso.png`：发给 AI 的那张图（默认 `iso` 三/四视角、1024 px、白底；`--hero-view` / `--hero-size` 可改）；
+* `models.json` 里的 `generation`（服务、任务 id、耗时、生成模型路径）和 `candidate.auto_orient`（自动选出的朝向）。
+
+生成的模型保存在 `models/generated/<provider>_<task_id>.glb`，旁边的同名 json 记录任务信息。
+
+### 支持的服务
+
+| `--provider` | 环境变量 | 图生 3D | 文生 3D | 接口 |
+| --- | --- | --- | --- | --- |
+| `meshy`（默认） | `MESHY_API_KEY` | `POST /openapi/v1/image-to-3d`（图片以 base64 data URI 发送） | `POST /openapi/v2/text-to-3d`（`preview` 阶段） | 轮询到 `SUCCEEDED` 后下载 `model_urls.glb` |
+| `tripo` | `TRIPO_API_KEY` | `POST /v2/openapi/upload` + `POST /task`（`image_to_model`） | `POST /task`（`text_to_model`） | 轮询到 `success` 后下载 `output.pbr_model` |
+
+两者都是付费 / 按额度计费的服务，只有显式执行 `generate-model` 或 `reproduce` 时才会调用。默认不生成贴图（`--texture` 开启），
+因为打分只看几何。`--poll-interval`（默认 10 s）和 `--timeout`（默认 30 min）控制等待。
+
+这两个客户端按官方文档 / 官方 SDK 的接口实现，并用模拟的 HTTP 服务做了单元测试；没有用真实账号跑过，
+第一次使用时如果接口有变动请把报错贴出来。
+
+### 怎么解读分数
+
+* AI 生成的模型通常比例、细节和原模型都有差异，分数落在 50–80 分是正常的；同一参考模型下不同服务、不同提示词之间的**相对**分数更有意义。
+* 自动对齐只解决 90° 旋转。如果生成的模型是斜着的，或左右镜像了，分数会偏低，需要自己在建模软件里转正后用 `--candidate` 传入。
+* 三视图看不到内部结构，贴图和颜色也不参与打分。
 
 ---
 
@@ -575,13 +633,13 @@ image_similarity_benchmark/
 ├── data/
 │   ├── reference/            放 reference 图片
 │   └── candidate/            放 candidate 图片
-├── models/                   下载的三维模型缓存（git 忽略）
+├── models/                   下载的三维模型缓存（git 忽略）；generated/ 放 AI 生成的模型
 ├── outputs/                  每次运行生成 run_时间/
 ├── scripts/
 │   └── make_sample_data.py   生成合成示例数据（默认为物体三视图）
 ├── src/
 │   ├── __init__.py
-│   ├── cli.py                命令行入口（compare / compare-pair / compare-models / render-views / fetch-sketchfab）
+│   ├── cli.py                命令行入口（compare / compare-pair / compare-models / render-views / fetch-sketchfab / generate-model / reproduce）
 │   ├── config.py             YAML 加载与严格校验
 │   ├── preprocessing.py      读取、EXIF、alpha 合成、mask、裁剪、画布
 │   ├── alignment.py          打分前的平移对齐（相位相关 / 质心）
@@ -590,7 +648,9 @@ image_similarity_benchmark/
 │   ├── reporting.py          metrics.json / metrics.csv / comparison / report.png
 │   ├── synthetic.py          合成测试图片生成器（抽象形状 + 单物体三视图）
 │   ├── objects.py            多物体测试用例：基本体拼装 + 正交三视图渲染
-│   ├── render.py             三维网格加载、姿态归一化、numpy 正交光栅化三视图
+│   ├── render.py             三维网格加载、姿态归一化、numpy 正交光栅化三视图（含 iso 视角）
+│   ├── orient.py             枚举 24 种朝向、按剪影 IoU 自动对齐 candidate
+│   ├── generate.py           Meshy / Tripo 图生 3D、文生 3D 客户端（创建任务、轮询、下载）
 │   └── sketchfab.py          Sketchfab Data / Download API 客户端（下载 + 缓存）
 └── tests/
     ├── conftest.py
@@ -600,5 +660,7 @@ image_similarity_benchmark/
     ├── test_alignment.py     平移估计、对齐应用、阈值拒绝
     ├── test_objects.py       七个物体用例的逐指标预期与分组分数
     ├── test_render.py        光栅化、视图朝向、up 轴、CLI render-views / compare-models
+    ├── test_orient.py        旋转后的模型能被自动对齐回来、iso 视角
+    ├── test_generate.py      Meshy / Tripo 客户端（模拟 HTTP）、CLI generate-model / reproduce
     └── test_sketchfab.py     URL 解析、下载 / 缓存 / 错误处理（模拟 HTTP）
 ```

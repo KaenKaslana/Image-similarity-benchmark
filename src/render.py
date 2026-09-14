@@ -53,15 +53,20 @@ AXIS_NAMES = tuple(_AXES)
 # (forward direction the camera looks along, image-up direction). They follow
 # third-angle projection: the top view shows the front of the object at the
 # bottom of the image, the right side view shows the front on the left.
-VIEWS: dict[str, tuple[str, str]] = {
+# ``iso`` is a three-quarter view from front-right-above, useful as the
+# single "hero" image handed to an image-to-3D generator.
+_ISO_FORWARD = -np.array([1.0, 0.8, 1.0]) / np.linalg.norm([1.0, 0.8, 1.0])
+VIEWS: dict[str, tuple[Any, Any]] = {
     "front": ("-z", "+y"),
     "back": ("+z", "+y"),
     "side": ("-x", "+y"),  # right side view
     "left": ("+x", "+y"),
     "top": ("-y", "-z"),
     "bottom": ("+y", "+z"),
+    "iso": (_ISO_FORWARD, "+y"),
 }
 DEFAULT_VIEWS = ("front", "side", "top")
+ORTHO_VIEWS = ("front", "back", "side", "left", "top", "bottom")
 STYLES = ("shaded", "silhouette")
 
 
@@ -126,6 +131,29 @@ class LoadedMesh:
 # ---------------------------------------------------------------------------
 # Loading and normalisation
 # ---------------------------------------------------------------------------
+def all_orientations() -> list[tuple[str, str]]:
+    """The 24 right-handed ``(up, front)`` axis pairs."""
+    return [(u, f) for u in AXIS_NAMES for f in AXIS_NAMES if abs(float(_AXES[u] @ _AXES[f])) < 1e-9]
+
+
+def reorient(mesh: LoadedMesh, up: str, front: str) -> LoadedMesh:
+    """Return a copy of an already-canonical mesh re-interpreted with a new up/front.
+
+    The mesh was loaded with some ``(up0, front0)``; this applies the extra
+    rotation that ``(up, front)`` would have produced relative to the
+    identity, then re-normalises centre and scale (the bounding box changes
+    with rotation).
+    """
+    rot = canonical_rotation(up, front)
+    vertices = mesh.vertices @ rot.T
+    normals = mesh.face_normals @ rot.T
+    lo, hi = vertices.min(0), vertices.max(0)
+    vertices = (vertices - (lo + hi) / 2.0) / float((hi - lo).max())
+    meta = dict(mesh.meta)
+    meta["reoriented"] = {"up": up, "front": front}
+    return LoadedMesh(vertices, mesh.faces, normals, mesh.source, mesh.original_extents, meta)
+
+
 def canonical_rotation(up: str, front: str) -> np.ndarray:
     """Rotation matrix ``R`` such that ``R @ p`` maps ``up`` to +Y and ``front`` to +Z."""
     y = _AXES[up]
@@ -290,11 +318,17 @@ def rasterize(
 # ---------------------------------------------------------------------------
 # Views
 # ---------------------------------------------------------------------------
+def _axis(spec: Any) -> np.ndarray:
+    return _AXES[spec] if isinstance(spec, str) else np.asarray(spec, dtype=np.float64)
+
+
 def view_basis(view: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """``(right, up, forward)`` unit vectors of a named view."""
-    forward_name, up_name = VIEWS[view]
-    forward = _AXES[forward_name]
-    up = _AXES[up_name]
+    """``(right, up, forward)`` orthonormal vectors of a named view."""
+    forward_spec, up_spec = VIEWS[view]
+    forward = _axis(forward_spec)
+    up = _axis(up_spec)
+    up = up - forward * float(up @ forward)  # orthogonalise (matters for iso)
+    up = up / np.linalg.norm(up)
     right = np.cross(forward, up)
     return right, up, forward
 
@@ -386,7 +420,7 @@ def parse_views(text: str | Sequence[str]) -> tuple[str, ...]:
     """``"front,side,top"`` or ``"all"`` -> tuple of view names."""
     if isinstance(text, str):
         if text.strip().lower() == "all":
-            return tuple(VIEWS)
+            return ORTHO_VIEWS
         parts = [p.strip().lower() for p in text.split(",") if p.strip()]
     else:
         parts = [str(p).strip().lower() for p in text]
