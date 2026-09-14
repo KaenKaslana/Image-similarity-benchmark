@@ -296,10 +296,12 @@ python -m src.cli fetch-sketchfab https://sketchfab.com/3d-models/coffee-mug-<ui
 **朝向是最容易出错的地方**：两个模型如果「正面」定义不一致（一个 +Z 朝前、一个 -Y 朝前），即使模型一样分数也会很低。
 三种处理方式：
 
-* `--auto-orient`：枚举 candidate 的全部 24 种轴对齐朝向，渲染低分辨率剪影，选与 reference 三视图 IoU 平均值最高的那一种。
-  选中的朝向和前几名的 IoU 写在 `models.json` 的 `candidate.auto_orient` 里。只处理 90° 的旋转，不处理任意角度倾斜和镜像。
-  实测：把一把椅子绕 X、Z 各转 90° 后直接比较只有 63.8 分，加 `--auto-orient` 后恢复到 100 分。
-* `--candidate-up` / `--candidate-front`：手动为 candidate 指定与 reference 不同的轴。
+* `--auto-orient`：先枚举 candidate 的全部 24 种轴对齐朝向，渲染低分辨率剪影，选与 reference 三视图 IoU 平均值最高的那一种；
+  再绕选出的向上轴每 10° 扫一圈、在最佳角度附近按 2° 细化（AI 生成的模型通常向上轴是对的，但朝向跟着输入图片的拍摄角度走）。
+  选中的 `up` / `front` / `yaw` 和前几名的 IoU 写在 `models.json` 的 `candidate.auto_orient` 里。不处理绕其他轴的倾斜和镜像。
+  实测：把一把椅子绕 X、Z 各转 90° 后直接比较只有 63.8 分，加 `--auto-orient` 后恢复到 100 分；
+  Tripo v3.1 按 45° 视角图生成的椅子，只做 90° 对齐是 70.2 分，加上任意角度搜索（找到 -42°）后 91.3 分。
+* `--candidate-up` / `--candidate-front` / `--candidate-yaw`：手动为 candidate 指定与 reference 不同的轴和绕向上轴的角度。
 * 先用 `render-views` 分别看一眼三视图，再决定参数。
 
 ### 从 Sketchfab 读取模型
@@ -367,15 +369,27 @@ python -m src.cli generate-model --provider tripo --prompt "a coffee mug"
 | `tripo` | `TRIPO_API_KEY` | `POST /v2/openapi/upload` + `POST /task`（`image_to_model`） | `POST /task`（`text_to_model`） | 轮询到 `success` 后下载 `output.pbr_model` |
 
 两者都是付费 / 按额度计费的服务，只有显式执行 `generate-model` 或 `reproduce` 时才会调用。默认不生成贴图（`--texture` 开启），
-因为打分只看几何。`--poll-interval`（默认 10 s）和 `--timeout`（默认 30 min）控制等待。
+因为打分只看几何。`--model-version` 选服务的模型版本，`--param key=value` 透传任意任务参数（可重复），
+`--poll-interval`（默认 10 s）和 `--timeout`（默认 30 min）控制等待。
+
+Tripo 的实测计费（`models.json` 的 `generation.meta.consumed_credit` 会记录每次实际扣除的点数，日志也会打印剩余额度）：
+
+| 方式 | 点数 |
+| --- | --- |
+| 图生 3D，`--model-version v3.1-20260211`，不带贴图（推荐） | 20 |
+| 图生 3D，v2.5（不指定版本时的默认）或 v1.4，即使关闭贴图 | 30 |
+| 文生 3D，不带贴图（官方价目表） | 10 |
+
+注意：Tripo v3.x 会保留输入图片的视角，用 3/4 视角图生成的模型会整体旋转约 45°；`reproduce` 默认开启的自动对齐会把它转回来。
 
 这两个客户端按官方文档 / 官方 SDK 的接口实现，并用模拟的 HTTP 服务做了单元测试；没有用真实账号跑过，
 第一次使用时如果接口有变动请把报错贴出来。
 
 ### 怎么解读分数
 
-* AI 生成的模型通常比例、细节和原模型都有差异，分数落在 50–80 分是正常的；同一参考模型下不同服务、不同提示词之间的**相对**分数更有意义。
-* 自动对齐只解决 90° 旋转。如果生成的模型是斜着的，或左右镜像了，分数会偏低，需要自己在建模软件里转正后用 `--candidate` 传入。
+* AI 生成的模型通常比例、细节和原模型都有差异；同一参考模型下不同服务、不同版本、不同提示词之间的**相对**分数更有意义。
+  实测同一把维多利亚椅（Sketchfab `6479a190…`）：Tripo v2.5 图生 3D 91.8 分、v3.1 不带贴图 91.3 分、v1.4 87.9 分。
+* 自动对齐解决轴对齐和绕向上轴的任意旋转。如果生成的模型绕其他轴倾斜，或左右镜像了，分数会偏低，需要自己在建模软件里转正后用 `--candidate` 传入。
 * 三视图看不到内部结构，贴图和颜色也不参与打分。
 
 ---

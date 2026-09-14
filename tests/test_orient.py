@@ -9,7 +9,7 @@ import pytest
 
 trimesh = pytest.importorskip("trimesh")
 
-from src.orient import auto_orient, silhouette_masks  # noqa: E402
+from src.orient import apply_orientation, auto_orient, silhouette_masks  # noqa: E402
 from src.render import RenderOptions, all_orientations, load_mesh, render_view, reorient  # noqa: E402
 
 
@@ -80,3 +80,28 @@ def test_iso_view_renders_and_differs_from_front(reference_file: Path) -> None:
     front = render_view(m, "front", opts)
     assert (iso[..., 3] > 0).any()
     assert not np.array_equal(iso[..., 3] > 0, front[..., 3] > 0)
+
+
+@pytest.mark.parametrize("angle", [37.0, -120.0])
+def test_auto_orient_recovers_arbitrary_yaw(reference_file: Path, tmp_path: Path, angle: float) -> None:
+    rotated = _asymmetric_mesh()
+    rotated.apply_transform(trimesh.transformations.rotation_matrix(np.deg2rad(angle), [0, 1, 0]))
+    cand_path = tmp_path / "yawed.glb"
+    rotated.export(cand_path)
+
+    ref = load_mesh(reference_file)
+    views = ("front", "side", "top")
+    best = auto_orient(cand_path, ref, views, size=96)
+    assert best.mean_iou > 0.95
+    assert best.mean_iou > best.axis_aligned_iou
+    fixed = apply_orientation(load_mesh(cand_path), best.up, best.front, best.yaw)
+    ref_masks, fixed_masks = silhouette_masks(ref, views, 96), silhouette_masks(fixed, views, 96)
+    for v in views:
+        a, b = ref_masks[v], fixed_masks[v]
+        assert (a & b).sum() / (a | b).sum() > 0.95
+
+
+def test_auto_orient_yaw_can_be_disabled(reference_file: Path) -> None:
+    ref = load_mesh(reference_file)
+    best = auto_orient(reference_file, ref, ("front",), size=48, yaw_step=0)
+    assert best.yaw == 0.0 and best.mean_iou == pytest.approx(1.0)

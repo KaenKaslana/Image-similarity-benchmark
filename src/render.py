@@ -144,13 +144,25 @@ def reorient(mesh: LoadedMesh, up: str, front: str) -> LoadedMesh:
     identity, then re-normalises centre and scale (the bounding box changes
     with rotation).
     """
-    rot = canonical_rotation(up, front)
-    vertices = mesh.vertices @ rot.T
-    normals = mesh.face_normals @ rot.T
+    return rotate(mesh, canonical_rotation(up, front), {"reoriented": {"up": up, "front": front}})
+
+
+def yaw_matrix(degrees: float) -> np.ndarray:
+    """Rotation about the canonical up axis (+Y); positive turns the front towards +X."""
+    t = np.deg2rad(degrees)
+    c, s_ = np.cos(t), np.sin(t)
+    return np.array([[c, 0.0, s_], [0.0, 1.0, 0.0], [-s_, 0.0, c]], dtype=np.float64)
+
+
+def rotate(mesh: LoadedMesh, matrix: np.ndarray, note: dict[str, Any] | None = None) -> LoadedMesh:
+    """Apply a rotation matrix to a canonical mesh and re-normalise centre/scale."""
+    vertices = mesh.vertices @ matrix.T
+    normals = mesh.face_normals @ matrix.T
     lo, hi = vertices.min(0), vertices.max(0)
     vertices = (vertices - (lo + hi) / 2.0) / float((hi - lo).max())
     meta = dict(mesh.meta)
-    meta["reoriented"] = {"up": up, "front": front}
+    if note:
+        meta.update(note)
     return LoadedMesh(vertices, mesh.faces, normals, mesh.source, mesh.original_extents, meta)
 
 

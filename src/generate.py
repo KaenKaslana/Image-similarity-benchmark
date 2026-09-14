@@ -49,6 +49,8 @@ class GenerationRequest:
     image: Path | None = None
     prompt: str | None = None
     texture: bool = False
+    model_version: str | None = None
+    options: dict[str, Any] = field(default_factory=dict)
     poll_interval: float = 10.0
     timeout: float = 1800.0
 
@@ -215,7 +217,7 @@ class Provider:
             prompt=req.prompt,
             image=str(req.image) if req.image else None,
             elapsed_seconds=time.monotonic() - start,
-            meta=meta,
+            meta={**meta, "model_version": req.model_version, "options": req.options, "texture": req.texture},
         )
         with open(target.with_suffix(".json"), "w", encoding="utf-8") as fh:
             json.dump(result.to_dict(), fh, indent=2)
@@ -242,6 +244,9 @@ class MeshyProvider(Provider):
         else:
             endpoint = f"{self.base}/v2/text-to-3d"
             payload = {"mode": "preview", "prompt": req.prompt}
+        if req.model_version:
+            payload["ai_model"] = req.model_version
+        payload.update(req.options)
         created = _json("POST", endpoint, self._headers(), payload)
         task_id = str(created.get("result") or "")
         if not task_id:
@@ -298,6 +303,11 @@ class TripoProvider(Provider):
             task = {"type": "text_to_model", "prompt": req.prompt}
         if not req.texture:
             task["texture"] = False
+            task["pbr"] = False
+        if req.model_version:
+            task["model_version"] = req.model_version
+        task.update(req.options)
+        logger.info("tripo: task parameters %s", {k: v for k, v in task.items() if k != "file"})
         created = self._data(_json("POST", f"{self.base}/task", self._headers(), task), "create task")
         task_id = str(created.get("task_id") or "")
         if not task_id:
@@ -313,8 +323,42 @@ class TripoProvider(Provider):
         glb = output.get("pbr_model") or output.get("model") or output.get("base_model")
         if not glb:
             raise GenerationError(f"tripo: task succeeded but no model url in {output}")
-        meta = {k: final.get(k) for k in ("type", "create_time") if final.get(k) is not None}
+        meta = {k: final.get(k) for k in ("type", "create_time", "consumed_credit") if final.get(k) is not None}
+        inp = final.get("input") or {}
+        meta["model_version_used"] = inp.get("model_version")
         return task_id, str(glb), meta
+
+
+def tripo_balance(api_key: str) -> int | None:
+    """Remaining Tripo credits, or ``None`` if the endpoint is unavailable."""
+    try:
+        data = _json("GET", f"{TripoProvider.base}/user/balance", {"Authorization": f"Bearer {api_key}"})
+        return int((data.get("data") or {}).get("balance"))
+    except (GenerationError, TypeError, ValueError):
+        return None
+
+
+def parse_options(items: list[str] | None) -> dict[str, Any]:
+    """``["face_limit=5000", "quad=true"]`` -> ``{"face_limit": 5000, "quad": True}``."""
+    out: dict[str, Any] = {}
+    for item in items or []:
+        if "=" not in item:
+            raise GenerationError(f"--param expects key=value, got {item!r}")
+        key, value = item.split("=", 1)
+        key = key.strip()
+        v = value.strip()
+        low = v.lower()
+        if low in ("true", "false"):
+            out[key] = low == "true"
+        else:
+            try:
+                out[key] = int(v)
+            except ValueError:
+                try:
+                    out[key] = float(v)
+                except ValueError:
+                    out[key] = v
+    return out
 
 
 def _safe(text: str) -> str:

@@ -22,8 +22,8 @@ from pathlib import Path
 
 from .benchmark import BenchmarkResult, BenchmarkRunner, PairingError, compute_overall_score
 from .config import ALIGNMENT_METHODS, BenchmarkConfig, ConfigError, CROP_MODES, DEVICES, load_config
-from .generate import GenerationError, GenerationRequest, PROVIDERS, get_provider
-from .orient import auto_orient
+from .generate import GenerationError, GenerationRequest, PROVIDERS, get_provider, parse_options, tripo_balance
+from .orient import apply_orientation, auto_orient
 from .render import (
     AXIS_NAMES,
     DEFAULT_VIEWS,
@@ -178,6 +178,7 @@ def _add_orient_args(parser: argparse.ArgumentParser, default_auto: bool = False
     )
     g.add_argument("--candidate-up", choices=AXIS_NAMES, default=None, help="Candidate up axis if it differs from --up")
     g.add_argument("--candidate-front", choices=AXIS_NAMES, default=None, help="Candidate front axis if it differs from --front")
+    g.add_argument("--candidate-yaw", type=float, default=0.0, help="Extra rotation of the candidate about its up axis, in degrees")
 
 
 def _add_generate_args(parser: argparse.ArgumentParser, require_input: bool) -> None:
@@ -188,6 +189,19 @@ def _add_generate_args(parser: argparse.ArgumentParser, require_input: bool) -> 
     src.add_argument("--image", type=Path, default=None, help="Input image for image-to-3D")
     src.add_argument("--prompt", default=None, help="Text prompt for text-to-3D")
     g.add_argument("--texture", action="store_true", help="Also generate textures (costs more credits; geometry only by default)")
+    g.add_argument(
+        "--model-version",
+        default=None,
+        help="Provider model version, e.g. Tripo 'v1.4-20240625' (cheapest), 'v2.0-20240919', 'v2.5-20250123', "
+        "'Turbo-v1.0-20250506'; Meshy 'meshy-6-lite'. Default: the provider's default (usually the newest and dearest)",
+    )
+    g.add_argument(
+        "--param",
+        action="append",
+        default=None,
+        metavar="KEY=VALUE",
+        help="Extra provider task parameter, repeatable (e.g. --param face_limit=20000 --param quad=false)",
+    )
     g.add_argument("--output-dir", type=Path, default=DEFAULT_GENERATED_DIR, help="Where generated GLBs are stored")
     g.add_argument("--poll-interval", type=float, default=10.0, help="Seconds between status polls")
     g.add_argument("--timeout", type=float, default=1800.0, help="Give up after this many seconds")
@@ -360,6 +374,7 @@ def run_model_comparison(
     cand_up: str | None,
     cand_front: str | None,
     extra_meta: dict | None = None,
+    cand_yaw: float = 0.0,
 ) -> BenchmarkResult:
     """Render both models (orienting the candidate if asked) and score them."""
     ref_mesh = load_mesh(ref_path, opts.up, opts.front)
@@ -367,11 +382,11 @@ def run_model_comparison(
     if auto:
         base = load_mesh(cand_path)
         best = auto_orient(base, ref_mesh, opts.views)
-        cand_mesh = load_mesh(cand_path, best.up, best.front)
+        cand_mesh = apply_orientation(base, best.up, best.front, best.yaw)
         orient_info = best.to_dict()
-        logger.info("Candidate orientation chosen automatically: up=%s front=%s", best.up, best.front)
+        logger.info("Candidate orientation chosen automatically: up=%s front=%s yaw=%.1f", best.up, best.front, best.yaw)
     else:
-        cand_mesh = load_mesh(cand_path, cand_up or opts.up, cand_front or opts.front)
+        cand_mesh = apply_orientation(load_mesh(cand_path), cand_up or opts.up, cand_front or opts.front, cand_yaw)
 
     with tempfile.TemporaryDirectory(prefix="imgsim_render_") as tmp:
         render_root = Path(tmp) if run_dir is None else run_dir / "renders"
@@ -384,9 +399,9 @@ def run_model_comparison(
 
     if run_dir is not None:
         if orient_info:
-            cand_axes = {"up": orient_info["up"], "front": orient_info["front"]}
+            cand_axes = {"up": orient_info["up"], "front": orient_info["front"], "yaw": orient_info["yaw"]}
         else:
-            cand_axes = {"up": cand_up or opts.up, "front": cand_front or opts.front}
+            cand_axes = {"up": cand_up or opts.up, "front": cand_front or opts.front, "yaw": cand_yaw}
         models_meta = {
             "reference": {"model": str(ref_path), "up": opts.up, "front": opts.front},
             "candidate": {"model": str(cand_path), **cand_axes, "auto_orient": orient_info},
@@ -415,7 +430,7 @@ def cmd_compare_models(args: argparse.Namespace) -> int:
     run_dir = None if args.no_save else BenchmarkRunner.create_run_dir(args.output)
     result = run_model_comparison(
         cfg, opts, ref_path, cand_path, run_dir, args.auto_orient, args.candidate_up, args.candidate_front,
-        extra_meta={"sketchfab": {"reference": ref_info, "candidate": cand_info}},
+        extra_meta={"sketchfab": {"reference": ref_info, "candidate": cand_info}}, cand_yaw=args.candidate_yaw,
     )
     return _print_result(result)
 
@@ -425,6 +440,8 @@ def _generation_request(args: argparse.Namespace, image: Path | None = None) -> 
         image=image if image is not None else args.image,
         prompt=args.prompt,
         texture=bool(args.texture),
+        model_version=args.model_version,
+        options=parse_options(args.param),
         poll_interval=float(args.poll_interval),
         timeout=float(args.timeout),
     )
@@ -432,12 +449,24 @@ def _generation_request(args: argparse.Namespace, image: Path | None = None) -> 
     return req
 
 
+def _generate_with_credit_report(provider, req: GenerationRequest, output_dir: Path):
+    before = tripo_balance(provider.api_key) if provider.name == "tripo" else None
+    logger.info("Submitting %s-to-3D task to %s (this can take several minutes)", req.mode, provider.name)
+    model = provider.generate(req, output_dir)
+    if before is not None:
+        after = tripo_balance(provider.api_key)
+        if after is not None:
+            model.meta["credits_used"] = before - after
+            model.meta["credits_left"] = after
+            logger.info("tripo: %d credits used, %d left", before - after, after)
+    return model
+
+
 def cmd_generate_model(args: argparse.Namespace) -> int:
     setup_logging(args.log_level)
     req = _generation_request(args)
     provider = get_provider(args.provider, args.api_key)
-    logger.info("Submitting %s-to-3D task to %s (this can take several minutes)", req.mode, provider.name)
-    model = provider.generate(req, args.output_dir)
+    model = _generate_with_credit_report(provider, req, args.output_dir)
     print(json.dumps(model.to_dict(), indent=2))
     return 0
 
@@ -465,15 +494,14 @@ def cmd_reproduce(args: argparse.Namespace) -> int:
             hero = _hero_image(ref_mesh, args.hero_view, int(args.hero_size), opts, hero_dir / f"hero_{args.hero_view}.png")
             logger.info("Rendered %s view of the reference for the generator: %s", args.hero_view, hero)
             req = _generation_request(args, image=hero)
-        logger.info("Submitting %s-to-3D task to %s (this can take several minutes)", req.mode, provider.name)
-        model = provider.generate(req, args.output_dir)
+        model = _generate_with_credit_report(provider, req, args.output_dir)
         cand_path = model.path
         generation = model.to_dict()
         logger.info("Generated model: %s (%.0fs)", cand_path, model.elapsed_seconds)
 
     result = run_model_comparison(
         cfg, opts, ref_path, cand_path, run_dir, args.auto_orient, args.candidate_up, args.candidate_front,
-        extra_meta={"sketchfab": {"reference": ref_info}, "generation": generation},
+        extra_meta={"sketchfab": {"reference": ref_info}, "generation": generation}, cand_yaw=args.candidate_yaw,
     )
     return _print_result(result)
 
