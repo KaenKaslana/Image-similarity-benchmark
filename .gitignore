@@ -8,6 +8,10 @@ dist/
 .venv/
 venv/
 
+# Downloaded 3D models (Sketchfab cache)
+models/*
+!models/.gitkeep
+
 # Benchmark outputs (keep the folder, ignore run directories)
 outputs/run_*/
 

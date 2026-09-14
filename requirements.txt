@@ -14,5 +14,8 @@ torch>=2.1
 torchvision>=0.16
 lpips>=0.1.4
 
+# 3D model loading for render-views / compare-models (glb, gltf, obj, stl, ply ...)
+trimesh>=4.0
+
 # Testing
 pytest>=7.4

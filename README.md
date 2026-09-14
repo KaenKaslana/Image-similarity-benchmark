@@ -13,8 +13,9 @@ reference/top.png   <-> candidate/top.png
 
 不同文件名的图片（例如不同视角）**永远不会**互相比较。
 
-> 本项目不处理 Blender 文件、不调用 Blender、不涉及任何三维模型，也不训练模型。
-> 它只比较已经准备好的二维图片。
+> 核心只比较二维图片，不训练模型。`compare-models` 子命令可以额外把两个三维模型（本地 glb/obj/stl 文件，
+> 或 Sketchfab 上可下载的模型）用完全相同的正交相机渲染成三视图，再交给同一套流程打分；
+> 渲染用纯 numpy 实现，不需要 Blender 或 OpenGL。见[三维模型对比](#三维模型对比)。
 
 ---
 
@@ -23,15 +24,16 @@ reference/top.png   <-> candidate/top.png
 1. [安装](#安装)
 2. [快速开始](#快速开始)
 3. [CLI 用法](#cli-用法)
-4. [输入要求](#输入要求)
-5. [预处理流程](#预处理流程)
-6. [指标说明](#指标说明)
-7. [分数计算](#分数计算)
-8. [输出文件](#输出文件)
-9. [配置文件](#配置文件)
-10. [测试](#测试)
-11. [重要说明与局限性](#重要说明与局限性)
-12. [项目结构](#项目结构)
+4. [三维模型对比](#三维模型对比)
+5. [输入要求](#输入要求)
+6. [预处理流程](#预处理流程)
+7. [指标说明](#指标说明)
+8. [分数计算](#分数计算)
+9. [输出文件](#输出文件)
+10. [配置文件](#配置文件)
+11. [测试](#测试)
+12. [重要说明与局限性](#重要说明与局限性)
+13. [项目结构](#项目结构)
 
 ---
 
@@ -241,6 +243,82 @@ python -m src.cli compare-pair --reference data/reference/front.png --candidate 
 | `--log-level LEVEL` | DEBUG / INFO / WARNING / ERROR |
 
 退出码：`0` 成功；`1` 没有任何有效配对；`2` 配置错误；`3` 输入/配对错误。
+
+---
+
+## 三维模型对比
+
+`compare-models` 把「下载模型 → 渲染三视图 → 配对打分」串成一条命令：
+
+```powershell
+# 两个本地模型
+python -m src.cli compare-models --reference models/a.glb --candidate models/b.glb
+
+# 一个本地模型 vs 一个 Sketchfab 模型（需要 API token，见下文）
+python -m src.cli compare-models --reference models/a.glb --candidate https://sketchfab.com/3d-models/coffee-mug-<uid>
+
+# 只渲染三视图，不打分
+python -m src.cli render-views --model models/a.glb --output renders/a --views front,side,top
+
+# 只下载 Sketchfab 模型（缓存到 models/<uid>.glb）
+python -m src.cli fetch-sketchfab https://sketchfab.com/3d-models/coffee-mug-<uid>
+```
+
+输出目录 `outputs/run_*/` 会多出：
+
+* `renders/reference/` 与 `renders/candidate/`：渲染出的 `front.png` / `side.png` / `top.png`（RGBA、透明背景）及 `views.json`（渲染参数与网格统计）；
+* `models.json`：两个模型的来源（本地路径或 Sketchfab 元数据：名称、作者、许可证）。
+
+其余文件（`metrics.json`、`report.png` 等）与 `compare` 完全相同。
+
+### 渲染方式
+
+* 支持 trimesh 能读取的格式：glb / gltf / obj / stl / ply / off / 3mf / dae 等；**不支持 fbx**。
+  场景中的多个部件会合并成一个网格（节点变换已应用）。
+* 模型先按 `--up` / `--front` 旋转到标准姿态（+Y 向上、+Z 朝向正视图的观察者），
+  再按包围盒居中并把**最大边长**缩放到 1。三个视图共用同一个比例，所以各视图的相对尺寸保持一致。
+* 正交投影，无透视。视图遵循第三角投影法：`front` 从 +Z 看，`side` 从 +X 看（模型正面在图像左侧），
+  `top` 从 +Y 看（模型正面在图像底部）。另有 `back` / `left` / `bottom`，`--views all` 渲染全部六个。
+* 着色为平面 headlight：灰度 = 环境光 + 面法线与视线夹角，两个模型使用完全相同的光照。`--style silhouette` 输出纯黑剪影。
+* 默认 2 倍超采样抗锯齿（`--supersample`），画布 512 px（`--size`），物体最大边占画布 85 %（`--fill`）。
+* 渲染是纯 numpy 的 z-buffer 光栅化，8 万面的网格单个视图约 0.5 s；不需要显卡、OpenGL 或 Blender。
+
+| 选项 | 默认 | 说明 |
+| --- | --- | --- |
+| `--views` | `front,side,top` | 逗号分隔的视图名或 `all` |
+| `--up` | `+y` | 模型的向上轴。glTF 规范是 +Y；Blender / 很多 STL 是 +Z |
+| `--front` | 随 `--up` | 模型正面朝向的轴（+Y 向上时默认 +Z，+Z 向上时默认 -Y） |
+| `--size` | 512 | 渲染分辨率 |
+| `--fill` | 0.85 | 最大边占画布的比例 |
+| `--style` | shaded | `shaded` 或 `silhouette` |
+
+**朝向是最容易出错的地方**：两个模型如果「正面」定义不一致（一个 +Z 朝前、一个 -Y 朝前），即使模型一样分数也会很低。
+先用 `render-views` 分别看一眼三视图，再调整 `--up` / `--front`（目前两个模型共用同一组参数；不一致时可先分别用
+`render-views` 渲染到两个文件夹，再用 `compare` 比较）。
+
+### 从 Sketchfab 读取模型
+
+1. 登录 Sketchfab，在 **Settings → Password & API** 复制 **API token**。
+2. 设置环境变量（或每次传 `--token`）：
+
+   ```powershell
+   $env:SKETCHFAB_API_TOKEN = "xxxxxxxx"        # PowerShell
+   export SKETCHFAB_API_TOKEN=xxxxxxxx           # bash / zsh
+   ```
+
+3. 用模型页面的 URL、`sketchfab:<uid>` 或 32 位 uid 作为 `--reference` / `--candidate` / `--model` 的值。
+   `skfb.ly` 短链接不支持，请用完整 URL。
+
+说明与限制：
+
+* 只有作者开启了 **Download** 的模型（通常是 CC 许可）才能通过 API 下载；未开启的模型会报错并给出原因。
+  下载的模型会把名称、作者、许可证写进 `models/<uid>.json`，使用时请遵守相应许可证。
+* 下载 API 返回 glb（优先）或 gltf 压缩包；压缩包会自动解压并定位到 `scene.gltf`。
+* 模型缓存在 `--models-dir`（默认 `models/`），重复使用不再联网；`fetch-sketchfab --force` 可强制重新下载。
+* 认证使用 API token（`Authorization: Token ...`）；也可通过 `SKETCHFAB_ACCESS_TOKEN` 传 OAuth access token。
+  这部分由于需要真实账号，只在单元测试里用模拟的 HTTP 服务验证过。
+* macOS 自带的 python.org 安装版可能缺少根证书，出现 `CERTIFICATE_VERIFY_FAILED` 时运行
+  `/Applications/Python 3.x/Install Certificates.command`，或 `export SSL_CERT_FILE=$(python3 -m certifi)`。
 
 ---
 
@@ -480,6 +558,8 @@ python -m pytest tests -q
 * **权重（0.40 / 0.30 / 0.20 / 0.10）是初始设定，需要通过人工评价数据进一步校准。** 建议收集一批人工打分的图片对，再调整权重使综合分数与人工判断相关性最高。
 * 不同视角（不同文件名）的图片不会互相比较；overall_score 只是各对分数的平均，并不代表任何跨视角的一致性。
 * Silhouette IoU 依赖可靠的前景 mask（alpha 通道或纯色背景）。没有可靠 mask 时该指标为 `null`，而不是伪造一个数值。
+* **三维模型对比仍然是二维图片相似度。** 三视图能反映外形轮廓和大体结构，但看不到被遮挡的内部结构；
+  两个模型的朝向、单位必须先统一（见[三维模型对比](#三维模型对比)），否则分数没有意义。渲染没有贴图和材质，只比较几何。
 
 ---
 
@@ -495,12 +575,13 @@ image_similarity_benchmark/
 ├── data/
 │   ├── reference/            放 reference 图片
 │   └── candidate/            放 candidate 图片
+├── models/                   下载的三维模型缓存（git 忽略）
 ├── outputs/                  每次运行生成 run_时间/
 ├── scripts/
 │   └── make_sample_data.py   生成合成示例数据（默认为物体三视图）
 ├── src/
 │   ├── __init__.py
-│   ├── cli.py                命令行入口（compare / compare-pair）
+│   ├── cli.py                命令行入口（compare / compare-pair / compare-models / render-views / fetch-sketchfab）
 │   ├── config.py             YAML 加载与严格校验
 │   ├── preprocessing.py      读取、EXIF、alpha 合成、mask、裁剪、画布
 │   ├── alignment.py          打分前的平移对齐（相位相关 / 质心）
@@ -508,12 +589,16 @@ image_similarity_benchmark/
 │   ├── benchmark.py          扫描、配对、运行、汇总
 │   ├── reporting.py          metrics.json / metrics.csv / comparison / report.png
 │   ├── synthetic.py          合成测试图片生成器（抽象形状 + 单物体三视图）
-│   └── objects.py            多物体测试用例：基本体拼装 + 正交三视图渲染
+│   ├── objects.py            多物体测试用例：基本体拼装 + 正交三视图渲染
+│   ├── render.py             三维网格加载、姿态归一化、numpy 正交光栅化三视图
+│   └── sketchfab.py          Sketchfab Data / Download API 客户端（下载 + 缓存）
 └── tests/
     ├── conftest.py
     ├── test_preprocessing.py
     ├── test_metrics.py
     ├── test_benchmark.py
     ├── test_alignment.py     平移估计、对齐应用、阈值拒绝
-    └── test_objects.py       七个物体用例的逐指标预期与分组分数
+    ├── test_objects.py       七个物体用例的逐指标预期与分组分数
+    ├── test_render.py        光栅化、视图朝向、up 轴、CLI render-views / compare-models
+    └── test_sketchfab.py     URL 解析、下载 / 缓存 / 错误处理（模拟 HTTP）
 ```

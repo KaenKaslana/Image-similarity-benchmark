@@ -353,6 +353,7 @@ class BenchmarkRunner:
         candidate_dir: str | Path,
         output_root: str | Path | None,
         skip_unmatched: bool | None = None,
+        run_dir: str | Path | None = None,
     ) -> BenchmarkResult:
         """Run the full benchmark over two folders.
 
@@ -362,6 +363,9 @@ class BenchmarkRunner:
             output_root: where to create the ``run_*`` directory. ``None``
                 disables all file output.
             skip_unmatched: override ``input.skip_unmatched`` from the config.
+            run_dir: write into this existing directory instead of creating a
+                new ``run_*`` folder under ``output_root`` (used by
+                ``compare-models``, which puts the renders there first).
 
         Raises:
             PairingError: on unmatched images (unless skipping) or empty folders.
@@ -370,7 +374,11 @@ class BenchmarkRunner:
             skip_unmatched = self.config.input.skip_unmatched
         pairs, skipped = pair_images(reference_dir, candidate_dir, self.config.input.extensions, skip_unmatched)
 
-        run_dir = self.create_run_dir(output_root) if output_root is not None else None
+        if run_dir is not None:
+            run_dir = Path(run_dir)
+            run_dir.mkdir(parents=True, exist_ok=True)
+        elif output_root is not None:
+            run_dir = self.create_run_dir(output_root)
         if run_dir is not None:
             logger.info("Run directory: %s", run_dir)
 
