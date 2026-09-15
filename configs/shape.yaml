@@ -1,0 +1,57 @@
+# "Shape-first" configuration for comparing 3D models by their outline.
+#
+# Differences from default.yaml:
+# * every view is cropped to the object's bounding box and scaled to fill
+#   the canvas (foreground_bbox), so the size of the object in the frame and
+#   the proportions between views do not count - only the shape of each view;
+# * the weights favour silhouette IoU and edge similarity over SSIM / LPIPS,
+#   because the latter are inflated by the shared white background and give
+#   ~60 points even to unrelated objects.
+#
+# Use with:  python -m src.cli compare-models ... --config configs/shape.yaml
+
+input:
+  extensions: [".png", ".jpg", ".jpeg"]
+  skip_unmatched: false
+
+preprocessing:
+  canvas_size: 512
+  background_color: [255, 255, 255]
+  crop_mode: foreground_bbox
+  foreground_padding: 0.10
+  mask_mode: auto
+  alpha_threshold: 16
+  mask_background_threshold: 12
+  mask_min_foreground_fraction: 0.001
+  mask_max_foreground_fraction: 0.98
+  resample: lanczos
+  alignment: phase_correlation
+  alignment_max_shift: 0.5
+
+metrics:
+  ssim:
+    gaussian_weights: true
+    sigma: 1.5
+    win_size: 7
+  lpips:
+    net: alex
+    device: auto
+  edge:
+    canny_low: 100
+    canny_high: 200
+    blur_kernel: 3
+    max_distance: 20.0
+    min_edge_fraction: 0.0005
+
+weights:
+  silhouette: 0.50
+  edge: 0.20
+  lpips: 0.15
+  ssim: 0.15
+
+output:
+  save_preprocessed: true
+  save_comparisons: true
+  report_pairs_per_page: 6
+  log_level: INFO
+  group_separator: "_"

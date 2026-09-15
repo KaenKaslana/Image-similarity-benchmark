@@ -385,6 +385,34 @@ Tripo 的实测计费（`models.json` 的 `generation.meta.consumed_credit` 会�
 这两个客户端按官方文档 / 官方 SDK 的接口实现，并用模拟的 HTTP 服务做了单元测试；没有用真实账号跑过，
 第一次使用时如果接口有变动请把报错贴出来。
 
+### 只看形状：`configs/shape.yaml`
+
+默认配置下 SSIM 和 LPIPS 对整张图计算，而画面大部分是共同的白色背景，所以毫不相关的两个物体也有 60 分左右，
+AI 复刻和「换了个物体」之间拉不开。`configs/shape.yaml` 做两件事：每个视图各自按前景包围盒裁剪并铺满画布
+（画面里物体的大小、各视图之间的比例不再计分，只剩每个视图的形状），并把权重改成 silhouette 0.50 / edge 0.20 / lpips 0.15 / ssim 0.15。
+
+```powershell
+python -m src.cli compare-models --reference a.glb --candidate b.glb --auto-orient --config configs/shape.yaml
+python -m src.cli reproduce --reference a.glb --candidate models/generated/xxx.glb --config configs/shape.yaml
+```
+
+用同一批模型实测（Tripo v3.1 生成，均开启自动对齐）：
+
+| 对比 | 默认配置 | shape.yaml |
+| --- | --- | --- |
+| 维多利亚椅 vs 图生复刻 | 91.3 | 87.8 |
+| Viking 角色 vs 图生复刻 | 88.5 | 84.4 |
+| 维多利亚椅 vs 文生复刻 | 79.8 | 67.9 |
+| Viking 角色 vs 文生复刻 | 78.4 | 63.8 |
+| Viking 角色 vs 中世纪骑士（两个不同人形） | 76.0 | 62.4 |
+| 龙 vs 文生复刻 | 69.0 | 50.1 |
+| Viking 角色 vs 龙 | 70.3 | 50.3 |
+| 维多利亚椅 vs 龙 | 65.8 | 41.0 |
+| 维多利亚椅 vs 马克杯 | 59.8 | 43.6 |
+
+形状版下大致可以这样读：85 以上是高质量复刻，60 到 70 是「同类但姿态 / 比例不同」，50 以下是不同物体。
+模型本身的尺寸在两种配置下都不影响分数（渲染前统一归一化）。
+
 ### 怎么解读分数
 
 * AI 生成的模型通常比例、细节和原模型都有差异；同一参考模型下不同服务、不同版本、不同提示词之间的**相对**分数更有意义。
