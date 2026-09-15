@@ -234,7 +234,7 @@ def test_cli_render_views_and_compare_models(mesh_file: Path, tmp_path: Path, ca
     printed = capsys.readouterr().out
     assert "overall_score" in printed and "front.png" in printed
     run = next(runs.glob("run_*"))
-    assert run.name.endswith("_handle-vs-variant")  # folder says what was compared
+    assert run.name.endswith("_handle_vs_variant")  # folder says what was compared
     assert (run / "renders" / "reference" / "front.png").is_file()
     assert (run / "renders" / "candidate" / "top.png").is_file()
     assert (run / "metrics.json").is_file() and (run / "models.json").is_file()

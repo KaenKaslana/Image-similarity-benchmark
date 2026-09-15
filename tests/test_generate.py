@@ -238,7 +238,7 @@ def test_cli_reproduce_with_fake_provider(tmp_path: Path, monkeypatch: pytest.Mo
     printed = capsys.readouterr().out
     assert "overall_score" in printed
     run = next(out.glob("run_*"))
-    assert run.name.endswith("_ref-vs-meshy-image")
+    assert run.name.endswith("_ref_vs_meshy-image")
     assert (run / "generation" / "hero_iso.png").is_file()
     meta = json.loads((run / "models.json").read_text())
     assert meta["generation"]["provider"] == "fake"

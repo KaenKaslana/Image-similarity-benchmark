@@ -344,7 +344,7 @@ class BenchmarkRunner:
         """
         output_root = Path(output_root)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        base = f"run_{stamp}" + (f"_{slugify(label)}" if label else "")
+        base = f"run_{stamp}" + (f"_{slugify(label, max_len=90)}" if label else "")
         run_dir = output_root / base
         counter = 1
         while run_dir.exists():
@@ -418,11 +418,11 @@ class BenchmarkRunner:
 
 
 def slugify(text: str, max_len: int = 40) -> str:
-    """Lower-case, keep letters/digits/CJK, join the rest with ``-``; used for folder names."""
+    """Lower-case, keep letters/digits/CJK/``_``, join the rest with ``-``; used for folder names."""
     text = str(text).strip().lower()
-    text = re.sub(r"[^0-9a-z\u4e00-\u9fff.+]+", "-", text).strip("-.")
+    text = re.sub(r"[^0-9a-z\u4e00-\u9fff.+_]+", "-", text).strip("-._")
     text = re.sub(r"-{2,}", "-", text)
-    return text[:max_len].rstrip("-.") or "run"
+    return text[:max_len].rstrip("-._") or "run"
 
 
 def compute_overall_score(results: Sequence[PairResult]) -> float | None:

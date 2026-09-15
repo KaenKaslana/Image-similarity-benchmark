@@ -32,8 +32,13 @@ COLUMNS = [
 
 
 def _config_name(cfg: dict) -> str:
+    """``shape`` / ``default`` for the shipped configs, otherwise crop mode + weights."""
     crop = (cfg.get("preprocessing") or {}).get("crop_mode", "?")
     w = cfg.get("weights") or {}
+    if crop == "foreground_bbox" and w.get("silhouette", 0) >= 0.5:
+        return "shape"
+    if crop == "none" and abs(w.get("lpips", 0) - 0.4) < 1e-6 and abs(w.get("ssim", 0) - 0.3) < 1e-6:
+        return "default"
     weights = "/".join(f"{k[:3]}{v:.2f}".rstrip("0").rstrip(".") for k, v in w.items())
     return f"{crop} {weights}"
 
@@ -90,7 +95,7 @@ def _fmt(v) -> str:
         return "n/a"
     if isinstance(v, float):
         return f"{v:.1f}"
-    return str(v)
+    return str(v).replace("|", "/")
 
 
 def write_tables(rows: list[dict], output_root: Path) -> tuple[Path, Path]:

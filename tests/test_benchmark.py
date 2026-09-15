@@ -354,6 +354,6 @@ def test_slugify_and_labelled_run_dir(tmp_path: Path) -> None:
     assert slugify("!!!") == "run"
     assert len(slugify("x" * 100)) == 40
     run = BenchmarkRunner.create_run_dir(tmp_path, "Victorian chair_vs_tripo-text-v3.1")
-    assert run.name.endswith("_victorian-chair-vs-tripo-text-v3.1") and run.is_dir()
+    assert run.name.endswith("_victorian-chair_vs_tripo-text-v3.1") and run.is_dir()
     plain = BenchmarkRunner.create_run_dir(tmp_path)
     assert plain.name.count("_") == 2

@@ -207,6 +207,11 @@ def describe_model(path: Path, info: dict | None = None, generation: dict | None
     return path.stem
 
 
+def _pair_label(reference: str, candidate: str, side_len: int = 36) -> str:
+    """``"<ref>_vs_<cand>"`` with each side shortened so the folder name stays readable."""
+    return f"{slugify(reference, side_len)}_vs_{slugify(candidate, side_len)}"
+
+
 def _add_orient_args(parser: argparse.ArgumentParser, default_auto: bool = False) -> None:
     g = parser.add_argument_group("candidate orientation")
     g.add_argument(
@@ -467,7 +472,7 @@ def cmd_compare_models(args: argparse.Namespace) -> int:
     opts = render_options_from_args(args)
     ref_path, ref_info = resolve_model(args.reference, args)
     cand_path, cand_info = resolve_model(args.candidate, args)
-    label = args.label or f"{describe_model(ref_path, ref_info)}_vs_{describe_model(cand_path, cand_info)}"
+    label = args.label or _pair_label(describe_model(ref_path, ref_info), describe_model(cand_path, cand_info))
     run_dir = None if args.no_save else BenchmarkRunner.create_run_dir(args.output, label)
     result = run_model_comparison(
         cfg, opts, ref_path, cand_path, run_dir, args.auto_orient, args.candidate_up, args.candidate_front,
@@ -524,12 +529,12 @@ def cmd_reproduce(args: argparse.Namespace) -> int:
         cand_path = Path(args.candidate).expanduser()
         if not cand_path.is_file():
             raise RenderError(f"candidate model not found: {cand_path}")
-        label = args.label or f"{ref_name}_vs_{describe_model(cand_path)}"
+        label = args.label or _pair_label(ref_name, describe_model(cand_path))
         run_dir = None if args.no_save else BenchmarkRunner.create_run_dir(args.output, label)
     else:
         ver = re.sub(r"-\d{8}$", "", args.model_version or "")
         mode = "text" if args.prompt else "image"
-        label = args.label or f"{ref_name}_vs_" + "-".join(x for x in (args.provider, mode, ver) if x)
+        label = args.label or _pair_label(ref_name, "-".join(x for x in (args.provider, mode, ver) if x))
         run_dir = None if args.no_save else BenchmarkRunner.create_run_dir(args.output, label)
         provider = get_provider(args.provider, args.api_key)
         hero: Path | None = None
