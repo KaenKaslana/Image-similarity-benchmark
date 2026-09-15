@@ -238,6 +238,7 @@ def test_cli_reproduce_with_fake_provider(tmp_path: Path, monkeypatch: pytest.Mo
     printed = capsys.readouterr().out
     assert "overall_score" in printed
     run = next(out.glob("run_*"))
+    assert run.name.endswith("_ref-vs-meshy-image")
     assert (run / "generation" / "hero_iso.png").is_file()
     meta = json.loads((run / "models.json").read_text())
     assert meta["generation"]["provider"] == "fake"
@@ -250,3 +251,23 @@ def test_cli_reproduce_with_fake_provider(tmp_path: Path, monkeypatch: pytest.Mo
     code = cli.main(["reproduce", "--reference", str(ref_path), "--candidate", str(gen_path), "--no-save",
                      "--size", "64", "--canvas-size", "64", "--device", "cpu", "--log-level", "WARNING"])
     assert code == 0
+
+
+def test_describe_model(tmp_path: Path) -> None:
+    from src.cli import describe_model
+
+    plain = tmp_path / "thing.glb"
+    plain.write_bytes(b"x")
+    assert describe_model(plain) == "thing"
+    assert describe_model(plain, {"name": "Victorian chair"}) == "Victorian chair"
+    gen = {"provider": "tripo", "mode": "text", "meta": {"model_version_used": "v3.1-20260211"}}
+    assert describe_model(plain, None, gen) == "tripo-text-v3.1"
+    # sidecar json written by fetch-sketchfab / generate-model
+    sf = tmp_path / "abc.glb"
+    sf.write_bytes(b"x")
+    sf.with_suffix(".json").write_text(json.dumps({"uid": "abc", "name": "Coffee Mug"}))
+    assert describe_model(sf) == "Coffee Mug"
+    g = tmp_path / "meshy_1.glb"
+    g.write_bytes(b"x")
+    g.with_suffix(".json").write_text(json.dumps({"provider": "meshy", "mode": "image", "meta": {}}))
+    assert describe_model(g) == "meshy-image"

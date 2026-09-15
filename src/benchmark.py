@@ -14,6 +14,7 @@ The central class is :class:`BenchmarkRunner`. A run produces a directory
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -335,15 +336,20 @@ class BenchmarkRunner:
 
     # -- full run ---------------------------------------------------------
     @staticmethod
-    def create_run_dir(output_root: str | Path) -> Path:
-        """Create ``output_root/run_YYYYMMDD_HHMMSS`` (suffixed if it exists)."""
+    def create_run_dir(output_root: str | Path, label: str | None = None) -> Path:
+        """Create ``output_root/run_YYYYMMDD_HHMMSS[_label]`` (suffixed if it exists).
+
+        ``label`` is slugified (see :func:`slugify`) so the folder name says
+        what the run compared, e.g. ``run_20260915_101010_victorian-chair_vs_tripo-text-v3.1``.
+        """
         output_root = Path(output_root)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        run_dir = output_root / f"run_{stamp}"
+        base = f"run_{stamp}" + (f"_{slugify(label)}" if label else "")
+        run_dir = output_root / base
         counter = 1
         while run_dir.exists():
             counter += 1
-            run_dir = output_root / f"run_{stamp}_{counter}"
+            run_dir = output_root / f"{base}_{counter}"
         run_dir.mkdir(parents=True, exist_ok=False)
         return run_dir
 
@@ -409,6 +415,14 @@ class BenchmarkRunner:
             reporting.save_metrics_csv(bench, run_dir / "metrics.csv")
             reporting.save_report(bench, run_dir, pairs_per_page=self.config.output.report_pairs_per_page)
         return bench
+
+
+def slugify(text: str, max_len: int = 40) -> str:
+    """Lower-case, keep letters/digits/CJK, join the rest with ``-``; used for folder names."""
+    text = str(text).strip().lower()
+    text = re.sub(r"[^0-9a-z\u4e00-\u9fff.+]+", "-", text).strip("-.")
+    text = re.sub(r"-{2,}", "-", text)
+    return text[:max_len].rstrip("-.") or "run"
 
 
 def compute_overall_score(results: Sequence[PairResult]) -> float | None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -233,11 +234,22 @@ def test_cli_render_views_and_compare_models(mesh_file: Path, tmp_path: Path, ca
     printed = capsys.readouterr().out
     assert "overall_score" in printed and "front.png" in printed
     run = next(runs.glob("run_*"))
+    assert run.name.endswith("_handle-vs-variant")  # folder says what was compared
     assert (run / "renders" / "reference" / "front.png").is_file()
     assert (run / "renders" / "candidate" / "top.png").is_file()
     assert (run / "metrics.json").is_file() and (run / "models.json").is_file()
     metrics = json.loads((run / "metrics.json").read_text())
     assert 0 < metrics["overall_score"] < 100
+    assert metrics["configuration"]["preprocessing"]["crop_mode"] == "foreground_bbox"  # shape.yaml is the default
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+    from summarize_runs import summarize_run, write_tables
+
+    row = summarize_run(run)
+    assert row["reference"] == "handle" and row["candidate"] == "variant" and row["overall"] == metrics["overall_score"]
+    assert row["orientation"].startswith("manual")
+    md, csv_path = write_tables([row], runs)
+    assert "handle" in md.read_text() and csv_path.read_text().count("\n") == 2
 
     same = main(["compare-models", "--reference", str(mesh_file), "--candidate", str(mesh_file), "--no-save",
                  "--size", "64", "--canvas-size", "64", "--device", "cpu", "--log-level", "WARNING"])

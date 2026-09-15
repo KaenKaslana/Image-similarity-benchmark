@@ -16,11 +16,12 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 import sys
 import tempfile
 from pathlib import Path
 
-from .benchmark import BenchmarkResult, BenchmarkRunner, PairingError, compute_overall_score
+from .benchmark import BenchmarkResult, BenchmarkRunner, PairingError, compute_overall_score, slugify
 from .config import ALIGNMENT_METHODS, BenchmarkConfig, ConfigError, CROP_MODES, DEVICES, load_config
 from .generate import GenerationError, GenerationRequest, PROVIDERS, get_provider, parse_options, tripo_balance
 from .orient import apply_orientation, auto_orient
@@ -42,6 +43,10 @@ from .sketchfab import SketchfabError, download_model, is_sketchfab_reference
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG = PROJECT_ROOT / "configs" / "default.yaml"
+# compare-models / reproduce default to the shape-first config: every view is
+# cropped to the object and the weights favour silhouette + edges, so only the
+# shape of each view counts (see README "只看形状").
+SHAPE_CONFIG = PROJECT_ROOT / "configs" / "shape.yaml"
 DEFAULT_MODELS_DIR = PROJECT_ROOT / "models"
 DEFAULT_GENERATED_DIR = DEFAULT_MODELS_DIR / "generated"
 
@@ -158,13 +163,48 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _add_model_benchmark_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--output", type=Path, default=PROJECT_ROOT / "outputs", help="Output root (default: outputs/)")
-    parser.add_argument("--config", type=Path, default=None, help="YAML config for the image benchmark")
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help=f"YAML config for the image benchmark (default: {SHAPE_CONFIG.relative_to(PROJECT_ROOT)}, shape-first)",
+    )
     parser.add_argument("--crop-mode", choices=CROP_MODES, default=None, help="Override preprocessing.crop_mode")
     parser.add_argument("--alignment", choices=ALIGNMENT_METHODS, default=None, help="Override preprocessing.alignment")
     parser.add_argument("--canvas-size", type=int, default=None, help="Override preprocessing.canvas_size")
     parser.add_argument("--device", choices=DEVICES, default=None, help="Override metrics.lpips.device")
     parser.add_argument("--no-save", action="store_true", help="Do not write any files; print results only")
     parser.add_argument("--log-level", default=None, help="Override output.log_level")
+    parser.add_argument(
+        "--label",
+        default=None,
+        help="Name suffix of the run folder (default: derived from the model names, e.g. victorian-chair_vs_tripo-text-v3.1)",
+    )
+
+
+def describe_model(path: Path, info: dict | None = None, generation: dict | None = None) -> str:
+    """Short human-readable name of a model for run folders and result tables.
+
+    Priority: Sketchfab model name -> generated-model descriptor
+    (``tripo-text-v3.1``) -> cached Sketchfab metadata next to the file -> file stem.
+    """
+    if info and info.get("name"):
+        return str(info["name"])
+    if generation:
+        ver = generation.get("meta", {}).get("model_version_used") or generation.get("meta", {}).get("model_version") or ""
+        ver = re.sub(r"-\d{8}$", "", str(ver))
+        return "-".join(x for x in (generation.get("provider"), generation.get("mode"), ver) if x)
+    sidecar = path.with_suffix(".json")
+    if sidecar.is_file():
+        try:
+            data = json.loads(sidecar.read_text(encoding="utf-8"))
+            if data.get("name") and data.get("uid"):
+                return str(data["name"])
+            if data.get("provider"):
+                return describe_model(path, None, data)
+        except (ValueError, OSError):
+            pass
+    return path.stem
 
 
 def _add_orient_args(parser: argparse.ArgumentParser, default_auto: bool = False) -> None:
@@ -270,11 +310,11 @@ def resolve_model(reference: str, args: argparse.Namespace) -> tuple[Path, dict 
     raise RenderError(f"model not found: {reference!r} (not a local file and not a Sketchfab URL/uid)")
 
 
-def load_effective_config(args: argparse.Namespace) -> BenchmarkConfig:
-    """Load the YAML config and apply CLI overrides."""
+def load_effective_config(args: argparse.Namespace, default: Path = DEFAULT_CONFIG) -> BenchmarkConfig:
+    """Load the YAML config (``--config`` or ``default``) and apply CLI overrides."""
     config_path = args.config
-    if config_path is None and DEFAULT_CONFIG.is_file():
-        config_path = DEFAULT_CONFIG
+    if config_path is None and default.is_file():
+        config_path = default
     cfg = load_config(config_path)
     if args.crop_mode is not None:
         cfg.preprocessing.crop_mode = args.crop_mode
@@ -422,12 +462,13 @@ def _print_result(result: BenchmarkResult) -> int:
 
 
 def cmd_compare_models(args: argparse.Namespace) -> int:
-    cfg = load_effective_config(args)
+    cfg = load_effective_config(args, SHAPE_CONFIG)
     setup_logging(cfg.output.log_level)
     opts = render_options_from_args(args)
     ref_path, ref_info = resolve_model(args.reference, args)
     cand_path, cand_info = resolve_model(args.candidate, args)
-    run_dir = None if args.no_save else BenchmarkRunner.create_run_dir(args.output)
+    label = args.label or f"{describe_model(ref_path, ref_info)}_vs_{describe_model(cand_path, cand_info)}"
+    run_dir = None if args.no_save else BenchmarkRunner.create_run_dir(args.output, label)
     result = run_model_comparison(
         cfg, opts, ref_path, cand_path, run_dir, args.auto_orient, args.candidate_up, args.candidate_front,
         extra_meta={"sketchfab": {"reference": ref_info, "candidate": cand_info}}, cand_yaw=args.candidate_yaw,
@@ -472,18 +513,24 @@ def cmd_generate_model(args: argparse.Namespace) -> int:
 
 
 def cmd_reproduce(args: argparse.Namespace) -> int:
-    cfg = load_effective_config(args)
+    cfg = load_effective_config(args, SHAPE_CONFIG)
     setup_logging(cfg.output.log_level)
     opts = render_options_from_args(args)
     ref_path, ref_info = resolve_model(args.reference, args)
-    run_dir = None if args.no_save else BenchmarkRunner.create_run_dir(args.output)
+    ref_name = describe_model(ref_path, ref_info)
     generation: dict | None = None
 
     if args.candidate:
         cand_path = Path(args.candidate).expanduser()
         if not cand_path.is_file():
             raise RenderError(f"candidate model not found: {cand_path}")
+        label = args.label or f"{ref_name}_vs_{describe_model(cand_path)}"
+        run_dir = None if args.no_save else BenchmarkRunner.create_run_dir(args.output, label)
     else:
+        ver = re.sub(r"-\d{8}$", "", args.model_version or "")
+        mode = "text" if args.prompt else "image"
+        label = args.label or f"{ref_name}_vs_" + "-".join(x for x in (args.provider, mode, ver) if x)
+        run_dir = None if args.no_save else BenchmarkRunner.create_run_dir(args.output, label)
         provider = get_provider(args.provider, args.api_key)
         hero: Path | None = None
         if args.prompt:

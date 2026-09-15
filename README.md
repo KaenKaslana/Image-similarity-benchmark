@@ -265,7 +265,8 @@ python -m src.cli render-views --model models/a.glb --output renders/a --views f
 python -m src.cli fetch-sketchfab https://sketchfab.com/3d-models/coffee-mug-<uid>
 ```
 
-输出目录 `outputs/run_*/` 会多出：
+输出目录名会带上比较对象，例如 `outputs/run_20260915_101010_victorian-chair_vs_tripo-text-v3.1/`
+（Sketchfab 模型用其名称，AI 生成的模型用 `服务-方式-版本`，本地文件用文件名；`--label` 可自定义）。目录里会多出：
 
 * `renders/reference/` 与 `renders/candidate/`：渲染出的 `front.png` / `side.png` / `top.png`（RGBA、透明背景）及 `views.json`（渲染参数与网格统计）；
 * `models.json`：两个模型的来源（本地路径或 Sketchfab 元数据：名称、作者、许可证）。
@@ -385,15 +386,16 @@ Tripo 的实测计费（`models.json` 的 `generation.meta.consumed_credit` 会�
 这两个客户端按官方文档 / 官方 SDK 的接口实现，并用模拟的 HTTP 服务做了单元测试；没有用真实账号跑过，
 第一次使用时如果接口有变动请把报错贴出来。
 
-### 只看形状：`configs/shape.yaml`
+### 只看形状：`configs/shape.yaml`（`compare-models` / `reproduce` 的默认配置）
 
-默认配置下 SSIM 和 LPIPS 对整张图计算，而画面大部分是共同的白色背景，所以毫不相关的两个物体也有 60 分左右，
+`configs/default.yaml` 下 SSIM 和 LPIPS 对整张图计算，而画面大部分是共同的白色背景，所以毫不相关的两个物体也有 60 分左右，
 AI 复刻和「换了个物体」之间拉不开。`configs/shape.yaml` 做两件事：每个视图各自按前景包围盒裁剪并铺满画布
 （画面里物体的大小、各视图之间的比例不再计分，只剩每个视图的形状），并把权重改成 silhouette 0.50 / edge 0.20 / lpips 0.15 / ssim 0.15。
+`compare-models` 和 `reproduce` 不传 `--config` 时就用它；图片命令 `compare` / `compare-pair` 仍用 `default.yaml`。
 
 ```powershell
-python -m src.cli compare-models --reference a.glb --candidate b.glb --auto-orient --config configs/shape.yaml
-python -m src.cli reproduce --reference a.glb --candidate models/generated/xxx.glb --config configs/shape.yaml
+python -m src.cli compare-models --reference a.glb --candidate b.glb --auto-orient            # 默认已是 shape.yaml
+python -m src.cli compare-models --reference a.glb --candidate b.glb --config configs/default.yaml
 ```
 
 用同一批模型实测（Tripo v3.1 生成，均开启自动对齐）：
@@ -412,6 +414,15 @@ python -m src.cli reproduce --reference a.glb --candidate models/generated/xxx.g
 
 形状版下大致可以这样读：85 以上是高质量复刻，60 到 70 是「同类但姿态 / 比例不同」，50 以下是不同物体。
 模型本身的尺寸在两种配置下都不影响分数（渲染前统一归一化）。
+
+### 汇总所有运行：`scripts/summarize_runs.py`
+
+```powershell
+python scripts/summarize_runs.py                 # 扫描 outputs/run_*，写出 outputs/results.md 和 results.csv
+python scripts/summarize_runs.py --sort score
+```
+
+每行一次运行：比较的两个模型、生成方式（服务 / 图生或文生 / 版本 / 消耗点数）、配置、自动对齐结果、三个视图的分数和综合分。
 
 ### 怎么解读分数
 
@@ -671,14 +682,16 @@ image_similarity_benchmark/
 ├── requirements.txt
 ├── pyproject.toml
 ├── configs/
-│   └── default.yaml          默认配置（含注释）
+│   ├── default.yaml          图片比较的默认配置（含注释）
+│   └── shape.yaml            形状优先配置：compare-models / reproduce 的默认
 ├── data/
 │   ├── reference/            放 reference 图片
 │   └── candidate/            放 candidate 图片
 ├── models/                   下载的三维模型缓存（git 忽略）；generated/ 放 AI 生成的模型
 ├── outputs/                  每次运行生成 run_时间/
 ├── scripts/
-│   └── make_sample_data.py   生成合成示例数据（默认为物体三视图）
+│   ├── make_sample_data.py   生成合成示例数据（默认为物体三视图）
+│   └── summarize_runs.py     汇总 outputs/run_* 为 results.md / results.csv
 ├── src/
 │   ├── __init__.py
 │   ├── cli.py                命令行入口（compare / compare-pair / compare-models / render-views / fetch-sketchfab / generate-model / reproduce）

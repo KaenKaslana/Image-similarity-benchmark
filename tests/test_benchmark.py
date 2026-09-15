@@ -11,7 +11,7 @@ import pytest
 import yaml
 from PIL import Image
 
-from src.benchmark import BenchmarkRunner, PairingError, compute_overall_score, discover_images, pair_images
+from src.benchmark import BenchmarkRunner, PairingError, compute_overall_score, discover_images, pair_images, slugify
 from src.cli import main
 from src.config import BenchmarkConfig, ConfigError, config_from_dict, load_config
 from src.synthetic import adjust_brightness, draw_shape, write_sample_set
@@ -344,3 +344,16 @@ def test_three_view_identical_object_scores_100(tmp_path: Path) -> None:
         img.save(cand / name)
     result = BenchmarkRunner(_small_config()).run(ref, cand, None)
     assert all(p.pair_score > 99.5 for p in result.pairs)
+
+
+def test_slugify_and_labelled_run_dir(tmp_path: Path) -> None:
+    assert slugify("Viking/Medieval Game Character") == "viking-medieval-game-character"
+    assert slugify("  Victorian chair  ") == "victorian-chair"
+    assert slugify("tripo-text-v3.1") == "tripo-text-v3.1"
+    assert slugify("维多利亚椅 vs 龙") == "维多利亚椅-vs-龙"
+    assert slugify("!!!") == "run"
+    assert len(slugify("x" * 100)) == 40
+    run = BenchmarkRunner.create_run_dir(tmp_path, "Victorian chair_vs_tripo-text-v3.1")
+    assert run.name.endswith("_victorian-chair-vs-tripo-text-v3.1") and run.is_dir()
+    plain = BenchmarkRunner.create_run_dir(tmp_path)
+    assert plain.name.count("_") == 2
