@@ -106,7 +106,11 @@ def write_tables(rows: list[dict], output_root: Path) -> tuple[Path, Path]:
         w.writeheader()
         for r in rows:
             w.writerow({k: ("" if r[k] is None else r[k]) for k in COLUMNS})
-    lines = ["# Results", "", f"{len(rows)} run(s) under `{output_root}`. Scores are 0-100 (higher = more similar).", "",
+    try:
+        shown = output_root.resolve().relative_to(PROJECT_ROOT)
+    except ValueError:
+        shown = output_root
+    lines = ["# Results", "", f"{len(rows)} run(s) under `{shown}`. Scores are 0-100 (higher = more similar).", "",
              "| " + " | ".join(COLUMNS) + " |", "|" + "---|" * len(COLUMNS)]
     for r in rows:
         lines.append("| " + " | ".join(_fmt(r[k]) for k in COLUMNS) + " |")
