@@ -1,0 +1,12 @@
+# docker compose build
+# docker compose run --rm benchmark                          # run the test suite
+# docker compose run --rm benchmark python -m src.cli compare-models \
+#     --reference models/a.glb --candidate models/b.glb --auto-orient
+services:
+  benchmark:
+    image: imgsim
+    build: .
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./outputs:/app/outputs

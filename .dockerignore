@@ -1,0 +1,23 @@
+.git
+.vscode
+.idea
+.venv
+venv
+__pycache__
+*.py[cod]
+.pytest_cache
+*.egg-info
+build
+dist
+
+# Host data is bind-mounted at run time, not baked into the image
+models/*
+!models/.gitkeep
+outputs/run_*
+data/reference/*
+data/candidate/*
+!data/reference/.gitkeep
+!data/candidate/.gitkeep
+
+# API tokens (Sketchfab / Meshy / Tripo) must never end up in an image layer
+.env

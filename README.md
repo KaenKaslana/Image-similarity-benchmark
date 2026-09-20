@@ -658,6 +658,21 @@ python -m pytest tests -q
 
 ---
 
+## Docker
+
+```bash
+docker build -t imgsim .                 # 只含 benchmark（CPU 版 torch，LPIPS 权重已内置）
+docker run --rm imgsim                   # 跑测试
+docker run --rm -v "$PWD/models:/app/models" -v "$PWD/outputs:/app/outputs" imgsim \
+  python -m src.cli compare-models --reference models/a.glb --candidate models/b.glb --auto-orient
+```
+
+也可以用 compose：`docker compose build`，然后 `docker compose run --rm benchmark python -m src.cli ...`
+（`data/`、`models/`、`outputs/` 已挂载到宿主机）。要给别的工具（Blender 插件、AI 建模 agent 等）搭出来的模型打分，
+让它导出 glb 放进 `models/`，再用上面的 `compare-models` 命令和参考模型比较即可。
+
+---
+
 ## 重要说明与局限性
 
 请在解读分数时务必注意：
