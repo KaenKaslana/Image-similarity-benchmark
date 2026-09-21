@@ -8,6 +8,9 @@ dist/
 .venv/
 venv/
 
+# API tokens (Sketchfab / Tripo / Meshy) - never commit
+.env
+
 # Downloaded 3D models (Sketchfab cache)
 models/*
 !models/.gitkeep

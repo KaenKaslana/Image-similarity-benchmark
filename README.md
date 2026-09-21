@@ -671,6 +671,9 @@ docker run --rm -v "$PWD/models:/app/models" -v "$PWD/outputs:/app/outputs" imgs
 （`data/`、`models/`、`outputs/` 已挂载到宿主机）。要给别的工具（Blender 插件、AI 建模 agent 等）搭出来的模型打分，
 让它导出 glb 放进 `models/`，再用上面的 `compare-models` 命令和参考模型比较即可。
 
+API token（Sketchfab 下载、`reproduce` / `generate-model` 需要）：把 `.env.example` 复制为 `.env` 填好，compose 会自动读取；
+也可以在宿主机 `export` 后直接透传。`.env` 已被 git 和 Docker 镜像忽略。用 `docker run` 时加 `--env-file .env`。
+
 ---
 
 ## 重要说明与局限性

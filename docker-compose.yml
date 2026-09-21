@@ -6,6 +6,15 @@ services:
   benchmark:
     image: imgsim
     build: .
+    # API tokens: read from a local .env file (git-ignored, optional) and/or
+    # passed through from the host shell. Values are never written here.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - SKETCHFAB_API_TOKEN
+      - TRIPO_API_KEY
+      - MESHY_API_KEY
     volumes:
       - ./data:/app/data
       - ./models:/app/models
