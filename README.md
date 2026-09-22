@@ -390,7 +390,7 @@ Tripo 的实测计费（`models.json` 的 `generation.meta.consumed_credit` 会�
 
 `configs/default.yaml` 下 SSIM 和 LPIPS 对整张图计算，而画面大部分是共同的白色背景，所以毫不相关的两个物体也有 60 分左右，
 AI 复刻和「换了个物体」之间拉不开。`configs/shape.yaml` 做两件事：每个视图各自按前景包围盒裁剪并铺满画布
-（画面里物体的大小、各视图之间的比例不再计分，只剩每个视图的形状），并把权重改成 silhouette 0.50 / edge 0.20 / lpips 0.15 / ssim 0.15。
+（画面里物体的大小、各视图之间的比例不再计分，只剩每个视图的形状），把权重压到轮廓和边缘上，并用 `score_floors` 扣掉不相关物体也能拿到的底分（见下）。
 `compare-models` 和 `reproduce` 不传 `--config` 时就用它；图片命令 `compare` / `compare-pair` 仍用 `default.yaml`。
 
 ```powershell
@@ -398,22 +398,60 @@ python -m src.cli compare-models --reference a.glb --candidate b.glb --auto-orie
 python -m src.cli compare-models --reference a.glb --candidate b.glb --config configs/default.yaml
 ```
 
-用同一批模型实测（Tripo v3.1 生成，均开启自动对齐）：
+**为什么要有 `score_floors`。** 即使只看形状，两个毫不相关的物体（椅子 vs 龙）原先也有 40 多分，因为每个指标都有一个「白送」的底分：
 
-| 对比 | 默认配置 | shape.yaml |
+| 指标 | 不相关物体也能拿到 | 原因 |
 | --- | --- | --- |
-| 维多利亚椅 vs 图生复刻 | 91.3 | 87.8 |
-| Viking 角色 vs 图生复刻 | 88.5 | 84.4 |
-| 维多利亚椅 vs 文生复刻 | 79.8 | 67.9 |
-| Viking 角色 vs 文生复刻 | 78.4 | 63.8 |
-| Viking 角色 vs 中世纪骑士（两个不同人形） | 76.0 | 62.4 |
-| 龙 vs 文生复刻 | 69.0 | 50.1 |
-| Viking 角色 vs 龙 | 70.3 | 50.3 |
-| 维多利亚椅 vs 龙 | 65.8 | 41.0 |
-| 维多利亚椅 vs 马克杯 | 59.8 | 43.6 |
+| SSIM | 0.80–0.87 | 白背景 + 同样的灰色着色；椅子 vs 龙 0.86，椅子 vs 自己的 AI 复刻 0.85，没有区分度，所以权重设为 0 |
+| LPIPS | 距离 0.30–0.55（= 58–74 分） | `100·exp(-d)` 的映射很宽松 |
+| 轮廓 IoU | 0.15–0.45 | 两个都居中、都铺满画布的图形必然重叠 |
+| Edge | 8–35 分 | 轮廓线总有一部分离得不远 |
 
-形状版下大致可以这样读：85 以上是高质量复刻，60 到 70 是「同类但姿态 / 比例不同」，50 以下是不同物体。
-模型本身的尺寸在两种配置下都不影响分数（渲染前统一归一化）。
+`score_floors` 把每个指标的底分减掉再拉伸回 0–100，`score_gamma` 把中段抬高一些，`view_power` 决定三个视图怎么合成一个分：
+
+```text
+x        = clip((原始分 − floor) / (100 − floor), 0, 1)
+校准分   = 100 × x ^ score_gamma                      # 每个指标
+视图分   = 加权平均(校准分)
+综合分   = ( mean(视图分 ^ view_power) ) ^ (1 / view_power)   # 幂平均
+```
+
+* 低于 floor 记 0，100 仍是 100（同一个模型仍然满分）。
+* `score_gamma < 1` 时曲线上凸，「认得出是同一个东西、但比例姿态有出入」的复刻不会被线性刻度压得太低。
+* `view_power < 1` 的幂平均偏向**最差的那个视图**：真正的复刻三个视图都对得上，而不相关的物体经常只在某一个视图上碰巧像
+  （椅子和茶壶从正上方看都是一个圆饼，IoU 0.8）。普通平均下这一对有 24–29 分，幂平均后是 0.2 分。
+* `metrics.json` 同时保留原始分（`*_score`）和校准后的分（`calibrated_scores`），report.png 里多一行 `after floors`。
+  `configs/default.yaml` 三个参数都是中性值（无 floors、gamma 1、power 1），行为不变。
+
+#### 参数是怎么定的：`scripts/calibrate.py`
+
+```powershell
+python scripts/calibrate.py measure --workers 5    # 测 85 组样本对的原始指标，缓存到 outputs/calibration/raw.json（约 30 分钟）
+python scripts/calibrate.py fit                    # 网格搜索 floors / gamma / 权重 / view_power，打印各类样本的分数分布
+```
+
+样本：Sketchfab 上 11 个类别的 27 个单体模型（椅子、角色、龙、杯子、剑、汽车、吉他、桌子、茶壶、运动鞋、战斗机），组成 85 对，不花任何生成积分：
+
+| 类别 | 对数 | 说明 | shape.yaml 下的分数（最小 / 中位 / 最大） |
+| --- | --- | --- | --- |
+| identical | 4 | 模型和自己比 | 100 / 100 / 100 |
+| mild | 9 | 轻微变形的副本（各轴缩放 ±4 %） | 87.8 / 92.9 / 96.1 |
+| medium | 9 | 中等变形（缩放 ±12 %、弯曲、扭转 8°） | 71.2 / 75.6 / 84.6 |
+| strong | 9 | 强变形（缩放 ±25 %、明显弯曲、扭转 25°） | 35.7 / 45.8 / 66.8 |
+| ai_image | 2 | Tripo v3.1 图生复刻（椅子、Viking） | 86.3 / 87.8 / 89.4 |
+| ai_text | 3 | Tripo v3.1 文生复刻（椅子、Viking、龙） | 31.0 / 52.2 / 52.2 |
+| same | 19 | 同类别的另一个模型 | 0.4 / 46.8 / 79.4 |
+| unrelated | 30 | 不同类别 | 0.0 / 3.3 / 49.5（90 % 的样本低于 23） |
+
+选定的参数：floors silhouette 45 / edge 30 / lpips 70，`score_gamma` 0.4，`view_power` 0.25，权重 silhouette 0.45 / edge 0.25 / lpips 0.30 / ssim 0。
+
+大致读法：85 以上是高质量复刻，50 左右是认得出的粗略复刻，10 以下是不同物体。需要知道的几点：
+
+* 「同类别的另一个模型」分布很宽（0–79）：两把电吉他、两辆轿车本来就很像，能到 70 多分；两张造型不同的桌子只有十几分。
+  文生复刻（约 52）落在这个区间里，说明它还原的是类别和大致造型，而不是这个具体模型。
+* 不相关物体里仍有少数高分：剑 vs 电吉他 40 多分，因为两者在三个视图里都是一根细长条，从轮廓上确实像。
+* 参数是对这 85 对拟合的，真实 AI 复刻只有 5 个；换一批很不一样的物体（比如全是细长件）时建议重跑 `calibrate.py`。
+* 模型本身的尺寸在所有配置下都不影响分数（渲染前统一归一化）。
 
 ### 汇总所有运行：`scripts/summarize_runs.py`
 
@@ -709,7 +747,8 @@ image_similarity_benchmark/
 ├── outputs/                  每次运行生成 run_时间/
 ├── scripts/
 │   ├── make_sample_data.py   生成合成示例数据（默认为物体三视图）
-│   └── summarize_runs.py     汇总 outputs/run_* 为 results.md / results.csv
+│   ├── summarize_runs.py     汇总 outputs/run_* 为 results.md / results.csv
+│   └── calibrate.py          用 85 组样本对校准 shape.yaml 的 floors / gamma / 权重 / view_power
 ├── src/
 │   ├── __init__.py
 │   ├── cli.py                命令行入口（compare / compare-pair / compare-models / render-views / fetch-sketchfab / generate-model / reproduce）

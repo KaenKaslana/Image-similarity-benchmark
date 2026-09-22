@@ -103,6 +103,15 @@ def _metrics_text(p: "PairResult") -> str:
         f"Edge score: {_fmt(p.edge_score)}",
         f"Pair score: {_fmt(p.pair_score)}",
     ]
+    raw = {"ssim": p.ssim_score, "lpips": p.lpips_score, "silhouette": p.silhouette_score, "edge": p.edge_score}
+    if any(p.calibrated_scores.get(k) != v for k, v in raw.items()):
+        cal = p.calibrated_scores
+        lines.insert(
+            4,
+            "after floors: ssim {} lpips {} sil {} edge {}".format(
+                _fmt(cal.get("ssim"), 0), _fmt(cal.get("lpips"), 0), _fmt(cal.get("silhouette"), 0), _fmt(cal.get("edge"), 0)
+            ),
+        )
     if p.unavailable_metrics:
         lines.append("not available: " + ", ".join(p.unavailable_metrics))
     if p.alignment and p.alignment.get("method", "none") != "none":

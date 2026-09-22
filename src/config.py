@@ -184,6 +184,19 @@ class BenchmarkConfig:
     weights: dict[str, float] = field(
         default_factory=lambda: {"lpips": 0.40, "ssim": 0.30, "silhouette": 0.20, "edge": 0.10}
     )
+    # Per-metric score (0-100) that unrelated objects reach "for free"; scores
+    # are rescaled so that the floor maps to 0 and 100 stays 100. All zeros
+    # (the default) leaves scores unchanged. Missing metrics default to 0.
+    score_floors: dict[str, float] = field(default_factory=dict)
+    # Exponent applied after the floor rescaling: calibrated = 100 * x ** gamma
+    # with x in [0, 1]. 1.0 = linear; < 1 lifts mid-range scores (a rough but
+    # recognisable replica) while 0 stays 0 and 100 stays 100.
+    score_gamma: float = 1.0
+    # How the view scores of one object are combined: power mean with this
+    # exponent. 1.0 = arithmetic mean; smaller values lean towards the WEAKEST
+    # view, because a real replica matches in every view while unrelated
+    # objects often coincide in one (two round blobs seen from the top).
+    view_power: float = 1.0
     output: OutputConfig = field(default_factory=OutputConfig)
 
     def validate(self) -> None:
@@ -191,6 +204,17 @@ class BenchmarkConfig:
         self.preprocessing.validate()
         self.metrics.validate()
         self.weights = validate_weights(self.weights)
+        self.score_floors = validate_score_floors(self.score_floors)
+        if isinstance(self.score_gamma, bool) or not isinstance(self.score_gamma, (int, float)):
+            raise ConfigError(f"score_gamma must be a number, got {self.score_gamma!r}")
+        self.score_gamma = float(self.score_gamma)
+        if not 0.1 <= self.score_gamma <= 5.0:
+            raise ConfigError(f"score_gamma must be in [0.1, 5], got {self.score_gamma}")
+        if isinstance(self.view_power, bool) or not isinstance(self.view_power, (int, float)):
+            raise ConfigError(f"view_power must be a number, got {self.view_power!r}")
+        self.view_power = float(self.view_power)
+        if not 0.05 <= self.view_power <= 1.0:
+            raise ConfigError(f"view_power must be in [0.05, 1], got {self.view_power}")
         self.output.validate()
 
     def to_dict(self) -> dict[str, Any]:
@@ -201,6 +225,26 @@ class BenchmarkConfig:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+def validate_score_floors(floors: Mapping[str, Any] | None) -> dict[str, float]:
+    """Validate ``score_floors``: known metric names, each floor in ``[0, 100)``."""
+    floors = floors or {}
+    if not isinstance(floors, Mapping):
+        raise ConfigError("score_floors must be a mapping of metric name -> floor score")
+    unknown = set(floors) - set(METRIC_NAMES)
+    if unknown:
+        raise ConfigError(f"score_floors: unknown metric(s) {sorted(unknown)}; expected {list(METRIC_NAMES)}")
+    out: dict[str, float] = {}
+    for name in METRIC_NAMES:
+        value = floors.get(name, 0.0)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ConfigError(f"score_floors.{name} must be a number, got {value!r}")
+        value = float(value)
+        if not 0.0 <= value < 100.0:
+            raise ConfigError(f"score_floors.{name} must be in [0, 100), got {value}")
+        out[name] = value
+    return out
+
+
 def validate_weights(weights: Mapping[str, Any]) -> dict[str, float]:
     """Validate metric weights.
 

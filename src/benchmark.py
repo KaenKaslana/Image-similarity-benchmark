@@ -29,6 +29,7 @@ from .metrics import (
     LPIPSMetric,
     combine_scores,
     compute_edge_similarity,
+    apply_score_floor,
     compute_silhouette_iou,
     compute_ssim,
     iou_to_score,
@@ -73,6 +74,9 @@ class PairResult:
     edge_chamfer_ref_to_cand: float | None = None
     edge_chamfer_cand_to_ref: float | None = None
     pair_score: float | None = None
+    # Scores after ``score_floors`` rescaling; these feed ``pair_score``.
+    # Identical to the ``*_score`` fields when no floors are configured.
+    calibrated_scores: dict[str, float | None] = field(default_factory=dict)
     effective_weights: dict[str, float] = field(default_factory=dict)
     unavailable_metrics: list[str] = field(default_factory=list)
     mask_source_reference: str = "none"
@@ -106,6 +110,7 @@ class PairResult:
             "edge_chamfer_ref_to_cand": self.edge_chamfer_ref_to_cand,
             "edge_chamfer_cand_to_ref": self.edge_chamfer_cand_to_ref,
             "pair_score": self.pair_score,
+            "calibrated_scores": self.calibrated_scores,
             "effective_weights": self.effective_weights,
             "unavailable_metrics": self.unavailable_metrics,
             "mask_source_reference": self.mask_source_reference,
@@ -277,7 +282,10 @@ class BenchmarkRunner:
             "silhouette": result.silhouette_score,
             "edge": result.edge_score,
         }
-        result.pair_score, result.effective_weights = combine_scores(scores, self.config.weights)
+        floors = self.config.score_floors
+        gamma = self.config.score_gamma
+        result.calibrated_scores = {k: apply_score_floor(v, floors.get(k, 0.0), gamma) for k, v in scores.items()}
+        result.pair_score, result.effective_weights = combine_scores(result.calibrated_scores, self.config.weights)
         result.unavailable_metrics = [m for m in METRIC_NAMES if scores[m] is None]
         return result
 
@@ -389,8 +397,13 @@ class BenchmarkRunner:
             logger.info("Run directory: %s", run_dir)
 
         results = [self.compare_pair(p.reference, p.candidate, p.name, run_dir) for p in pairs]
-        overall = compute_overall_score(results)
-        groups = compute_group_scores(results, self.config.output.group_separator)
+        power = self.config.view_power
+        groups = compute_group_scores(results, self.config.output.group_separator, power)
+        if groups and power != 1.0:
+            # views are combined per object first; objects are then averaged
+            overall = float(np.mean([g["score"] for g in groups.values()]))
+        else:
+            overall = compute_overall_score(results, power)
         bench = BenchmarkResult(
             pairs=results,
             overall_score=overall,
@@ -425,12 +438,20 @@ def slugify(text: str, max_len: int = 40) -> str:
     return text[:max_len].rstrip("-._") or "run"
 
 
-def compute_overall_score(results: Sequence[PairResult]) -> float | None:
-    """Mean of all valid pair scores; ``None`` when there are none."""
+def power_mean(values: Sequence[float], power: float = 1.0) -> float:
+    """Power mean of non-negative scores; 1 = arithmetic mean, smaller leans towards the minimum."""
+    arr = np.clip(np.asarray(values, dtype=np.float64), 0.0, None)
+    if power == 1.0:
+        return float(arr.mean())
+    return float(np.mean(arr**power) ** (1.0 / power))
+
+
+def compute_overall_score(results: Sequence[PairResult], power: float = 1.0) -> float | None:
+    """Power mean (default: plain mean) of all valid pair scores; ``None`` when there are none."""
     valid = [r.pair_score for r in results if r.ok and r.pair_score is not None]
     if not valid:
         return None
-    return float(np.mean(valid))
+    return power_mean(valid, power)
 
 
 def group_name(file_name: str, separator: str) -> str | None:
@@ -447,8 +468,10 @@ def group_name(file_name: str, separator: str) -> str | None:
     return prefix or None
 
 
-def compute_group_scores(results: Sequence[PairResult], separator: str) -> dict[str, dict[str, Any]]:
-    """Average valid pair scores per object prefix.
+def compute_group_scores(
+    results: Sequence[PairResult], separator: str, power: float = 1.0
+) -> dict[str, dict[str, Any]]:
+    """Average (power mean) valid pair scores per object prefix.
 
     Returns ``{group: {"score": mean, "num_pairs": n, "pairs": [names]}}``
     sorted by group name. Pairs without a separator in their name are not
@@ -462,7 +485,7 @@ def compute_group_scores(results: Sequence[PairResult], separator: str) -> dict[
         buckets.setdefault(g, []).append(r)
     return {
         g: {
-            "score": float(np.mean([r.pair_score for r in rs])),
+            "score": power_mean([r.pair_score for r in rs], power),
             "num_pairs": len(rs),
             "pairs": [r.name for r in rs],
         }

@@ -36,7 +36,8 @@ def _config_name(cfg: dict) -> str:
     crop = (cfg.get("preprocessing") or {}).get("crop_mode", "?")
     w = cfg.get("weights") or {}
     if crop == "foreground_bbox" and w.get("silhouette", 0) >= 0.5:
-        return "shape"
+        floors = cfg.get("score_floors") or {}
+        return "shape" if any(floors.values()) else "shape-v1 (no floors)"
     if crop == "none" and abs(w.get("lpips", 0) - 0.4) < 1e-6 and abs(w.get("ssim", 0) - 0.3) < 1e-6:
         return "default"
     weights = "/".join(f"{k[:3]}{v:.2f}".rstrip("0").rstrip(".") for k, v in w.items())

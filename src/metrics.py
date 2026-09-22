@@ -250,6 +250,24 @@ def compute_edge_similarity(ref: np.ndarray, cand: np.ndarray, cfg: EdgeConfig |
 # ---------------------------------------------------------------------------
 # Weighted combination
 # ---------------------------------------------------------------------------
+def apply_score_floor(score: float | None, floor: float, gamma: float = 1.0) -> float | None:
+    """Calibrate a 0-100 score: ``100 * clip((score - floor) / (100 - floor), 0, 1) ** gamma``.
+
+    Every metric has a "chance level" that two unrelated objects reach anyway
+    (shared background for SSIM/LPIPS, two centred blobs overlapping for IoU).
+    Subtracting it makes the combined score start near 0 for unrelated
+    objects instead of ~40. ``gamma < 1`` then lifts the mid range, so that a
+    rough but recognisable replica is not punished as hard as a linear scale
+    would; the end points (floor -> 0, 100 -> 100) do not move.
+    """
+    if score is None:
+        return None
+    if floor <= 0 and gamma == 1.0:
+        return float(score)
+    x = min(1.0, max(0.0, (float(score) - floor) / (100.0 - floor)))
+    return 100.0 * x ** float(gamma)
+
+
 def combine_scores(
     scores: Mapping[str, float | None],
     weights: Mapping[str, float],

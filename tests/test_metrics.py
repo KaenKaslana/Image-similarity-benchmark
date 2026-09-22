@@ -270,3 +270,53 @@ def test_combine_scores_ignores_zero_weight_metrics() -> None:
     weights = {"lpips": 1.0, "ssim": 0.0, "silhouette": 0.0, "edge": 0.0}
     pair, eff = combine_scores({"lpips": 70.0, "ssim": 10.0, "silhouette": 10.0, "edge": 10.0}, weights)
     assert pair == 70.0 and eff == {"lpips": 1.0}
+
+
+# ---------------------------------------------------------------------------
+# score floors
+# ---------------------------------------------------------------------------
+def test_apply_score_floor() -> None:
+    from src.metrics import apply_score_floor
+
+    assert apply_score_floor(None, 35) is None
+    assert apply_score_floor(62.0, 0) == 62.0           # no floor: unchanged
+    assert apply_score_floor(100.0, 35) == 100.0        # identical stays 100
+    assert apply_score_floor(35.0, 35) == 0.0           # chance level -> 0
+    assert apply_score_floor(20.0, 35) == 0.0           # below the floor is clipped
+    assert apply_score_floor(67.5, 35) == pytest.approx(50.0)
+    # gamma < 1 lifts the middle, end points stay put
+    assert apply_score_floor(67.5, 35, 0.5) == pytest.approx(100 * 0.5 ** 0.5)
+    assert apply_score_floor(35.0, 35, 0.4) == 0.0 and apply_score_floor(100.0, 35, 0.4) == 100.0
+    assert apply_score_floor(50.0, 0, 0.5) == pytest.approx(100 * 0.5 ** 0.5)
+
+
+def test_score_floors_config_validation_and_effect() -> None:
+    from pathlib import Path
+
+    from src.config import ConfigError, config_from_dict, load_config
+
+    assert config_from_dict({}).score_floors == {"lpips": 0.0, "ssim": 0.0, "silhouette": 0.0, "edge": 0.0}
+    assert config_from_dict({"score_floors": {"silhouette": 35}}).score_floors["silhouette"] == 35.0
+    for bad in ({"iou": 10}, {"edge": 100}, {"edge": -1}, {"edge": "x"}):
+        with pytest.raises(ConfigError):
+            config_from_dict({"score_floors": bad})
+    assert config_from_dict({}).score_gamma == 1.0
+    for bad in (0, -1, "x", 9):
+        with pytest.raises(ConfigError):
+            config_from_dict({"score_gamma": bad})
+    shape = load_config(Path(__file__).resolve().parent.parent / "configs" / "shape.yaml")
+    assert shape.score_floors["silhouette"] > 0 and shape.weights["ssim"] == 0.0 and shape.score_gamma < 1.0
+
+
+def test_power_mean_and_view_power_config() -> None:
+    from src.benchmark import power_mean
+    from src.config import ConfigError, config_from_dict
+
+    assert power_mean([80, 80, 80], 0.25) == pytest.approx(80.0)
+    assert power_mean([90, 60, 30], 1.0) == pytest.approx(60.0)
+    assert 30 < power_mean([90, 60, 30], 0.25) < 60          # leans towards the weakest view
+    assert power_mean([80, 0, 80], 0.25) < power_mean([80, 0, 80], 1.0)
+    assert config_from_dict({}).view_power == 1.0
+    for bad in (0, 2, "x"):
+        with pytest.raises(ConfigError):
+            config_from_dict({"view_power": bad})

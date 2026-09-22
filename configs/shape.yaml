@@ -4,9 +4,12 @@
 # * every view is cropped to the object's bounding box and scaled to fill
 #   the canvas (foreground_bbox), so the size of the object in the frame and
 #   the proportions between views do not count - only the shape of each view;
-# * the weights favour silhouette IoU and edge similarity over SSIM / LPIPS,
-#   because the latter are inflated by the shared white background and give
-#   ~60 points even to unrelated objects.
+# * the weights favour silhouette IoU and edge similarity; SSIM is switched
+#   off because it stays at 0.80-0.90 for ANY two objects on a white
+#   background (chair vs dragon 0.86, chair vs its AI replica 0.85) and so
+#   carries no information here;
+# * score_floors subtract the "chance level" every metric reaches for two
+#   unrelated objects, so that unrelated objects score near 0 instead of ~40.
 #
 # Use with:  python -m src.cli compare-models ... --config configs/shape.yaml
 
@@ -43,11 +46,36 @@ metrics:
     max_distance: 20.0
     min_edge_fraction: 0.0005
 
+# Calibrated with scripts/calibrate.py on 85 pairs (27 Sketchfab models in 11
+# categories, deformed copies as graded replicas, 5 real Tripo replicas).
 weights:
-  silhouette: 0.50
-  edge: 0.20
-  lpips: 0.15
-  ssim: 0.15
+  silhouette: 0.45
+  edge: 0.25
+  lpips: 0.30
+  ssim: 0.00
+
+# Score (0-100) that two UNRELATED objects reach anyway; each metric is
+# rescaled so that this floor becomes 0 and 100 stays 100 (identical models
+# still score 100):
+#   silhouette: two centred, canvas-filling blobs overlap with IoU 0.15-0.45
+#   edge:       unrelated outlines give an edge score of 8-35
+#   lpips:      unrelated renders have distance 0.30-0.55 (= score 58-74)
+score_floors:
+  silhouette: 45
+  edge: 30
+  lpips: 70
+  ssim: 80
+# Curve applied after the floor: calibrated = 100 * x ** score_gamma (x in 0..1);
+# < 1 lifts the mid range (rough but recognisable replicas).
+score_gamma: 0.4
+# Views are combined with a power mean that leans towards the weakest view:
+# a real replica matches in all views, unrelated objects often coincide in
+# one (chair vs teapot from the top: IoU 0.8).
+view_power: 0.25
+# Medians on the calibration set:
+#   identical 100 | mild / medium / strong deformation 93 / 76 / 46 |
+#   Tripo image-to-3D 88 | Tripo text-to-3D 52 |
+#   different model of the same category 47 | unrelated 3 (90th percentile 23)
 
 output:
   save_preprocessed: true
