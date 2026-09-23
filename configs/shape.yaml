@@ -47,7 +47,9 @@ metrics:
     min_edge_fraction: 0.0005
 
 # Calibrated with scripts/calibrate.py on 85 pairs (27 Sketchfab models in 11
-# categories, deformed copies as graded replicas, 5 real Tripo replicas).
+# categories, deformed copies as graded replicas, 5 real Tripo replicas),
+# rendered as the six orthographic views. Three-view runs give the same
+# distribution within ~2 points.
 weights:
   silhouette: 0.45
   edge: 0.25

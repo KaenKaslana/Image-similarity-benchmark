@@ -46,8 +46,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 MODELS = PROJECT_ROOT / "models"
-RAW = PROJECT_ROOT / "outputs" / "calibration" / "raw.json"
-VIEWS = ("front", "side", "top")
+VIEWS = ("front", "back", "side", "left", "top", "bottom")
+RAW = PROJECT_ROOT / "outputs" / "calibration" / f"raw_{len(VIEWS)}views.json"
 
 # category -> Sketchfab uids (single, clean objects; screened by eye)
 SAMPLES: dict[str, list[str]] = {

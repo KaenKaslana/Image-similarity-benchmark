@@ -27,7 +27,7 @@ from src.cli import describe_model  # noqa: E402
 
 COLUMNS = [
     "run", "reference", "candidate", "generation", "credits", "config", "orientation",
-    "front", "side", "top", "overall",
+    "front", "back", "side", "left", "top", "bottom", "overall",
 ]
 
 
@@ -83,9 +83,7 @@ def summarize_run(run_dir: Path) -> dict | None:
         "credits": credits if credits is not None else "-",
         "config": _config_name(metrics.get("configuration") or {}),
         "orientation": orientation,
-        "front": per_view.get("front"),
-        "side": per_view.get("side"),
-        "top": per_view.get("top"),
+        **{v: per_view.get(v) for v in ("front", "back", "side", "left", "top", "bottom")},
         "overall": metrics.get("overall_score"),
     }
     return row

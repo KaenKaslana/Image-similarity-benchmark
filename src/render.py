@@ -65,8 +65,8 @@ VIEWS: dict[str, tuple[Any, Any]] = {
     "bottom": ("+y", "+z"),
     "iso": (_ISO_FORWARD, "+y"),
 }
-DEFAULT_VIEWS = ("front", "side", "top")
 ORTHO_VIEWS = ("front", "back", "side", "left", "top", "bottom")
+DEFAULT_VIEWS = ORTHO_VIEWS  # six orthographic views; "iso" only on request
 STYLES = ("shaded", "silhouette")
 
 

@@ -14,7 +14,7 @@ reference/top.png   <-> candidate/top.png
 不同文件名的图片（例如不同视角）**永远不会**互相比较。
 
 > 核心只比较二维图片，不训练模型。`compare-models` 子命令可以额外把两个三维模型（本地 glb/obj/stl 文件，
-> 或 Sketchfab 上可下载的模型）用完全相同的正交相机渲染成三视图，再交给同一套流程打分；
+> 或 Sketchfab 上可下载的模型）用完全相同的正交相机渲染成六视图（前后左右上下），再交给同一套流程打分；
 > 渲染用纯 numpy 实现，不需要 Blender 或 OpenGL。见[三维模型对比](#三维模型对比)。
 
 ---
@@ -249,7 +249,7 @@ python -m src.cli compare-pair --reference data/reference/front.png --candidate 
 
 ## 三维模型对比
 
-`compare-models` 把「下载模型 → 渲染三视图 → 配对打分」串成一条命令：
+`compare-models` 把「下载模型 → 渲染六视图 → 配对打分」串成一条命令：
 
 ```powershell
 # 两个本地模型
@@ -258,7 +258,8 @@ python -m src.cli compare-models --reference models/a.glb --candidate models/b.g
 # 一个本地模型 vs 一个 Sketchfab 模型（需要 API token，见下文）
 python -m src.cli compare-models --reference models/a.glb --candidate https://sketchfab.com/3d-models/coffee-mug-<uid>
 
-# 只渲染三视图，不打分
+# 只渲染六视图，不打分
+python -m src.cli render-views --model models/a.glb --output renders/a            # 默认六视图
 python -m src.cli render-views --model models/a.glb --output renders/a --views front,side,top
 
 # 只下载 Sketchfab 模型（缓存到 models/<uid>.glb）
@@ -268,7 +269,7 @@ python -m src.cli fetch-sketchfab https://sketchfab.com/3d-models/coffee-mug-<ui
 输出目录名会带上比较对象，例如 `outputs/run_20260915_101010_victorian-chair_vs_tripo-text-v3.1/`
 （Sketchfab 模型用其名称，AI 生成的模型用 `服务-方式-版本`，本地文件用文件名；`--label` 可自定义）。目录里会多出：
 
-* `renders/reference/` 与 `renders/candidate/`：渲染出的 `front.png` / `side.png` / `top.png`（RGBA、透明背景）及 `views.json`（渲染参数与网格统计）；
+* `renders/reference/` 与 `renders/candidate/`：渲染出的 `front.png` / `back.png` / `side.png` / `left.png` / `top.png` / `bottom.png`（RGBA、透明背景）及 `views.json`（渲染参数与网格统计）；
 * `models.json`：两个模型的来源（本地路径或 Sketchfab 元数据：名称、作者、许可证）。
 
 其余文件（`metrics.json`、`report.png` 等）与 `compare` 完全相同。
@@ -280,14 +281,14 @@ python -m src.cli fetch-sketchfab https://sketchfab.com/3d-models/coffee-mug-<ui
 * 模型先按 `--up` / `--front` 旋转到标准姿态（+Y 向上、+Z 朝向正视图的观察者），
   再按包围盒居中并把**最大边长**缩放到 1。三个视图共用同一个比例，所以各视图的相对尺寸保持一致。
 * 正交投影，无透视。视图遵循第三角投影法：`front` 从 +Z 看，`side` 从 +X 看（模型正面在图像左侧），
-  `top` 从 +Y 看（模型正面在图像底部）。另有 `back` / `left` / `bottom`，`--views all` 渲染全部六个。
+  `top` 从 +Y 看（模型正面在图像底部），`back` / `left` / `bottom` 是对面的三个。默认渲染全部六个；`--views front,side,top` 可退回三视图。
 * 着色为平面 headlight：灰度 = 环境光 + 面法线与视线夹角，两个模型使用完全相同的光照。`--style silhouette` 输出纯黑剪影。
 * 默认 2 倍超采样抗锯齿（`--supersample`），画布 512 px（`--size`），物体最大边占画布 85 %（`--fill`）。
 * 渲染是纯 numpy 的 z-buffer 光栅化，8 万面的网格单个视图约 0.5 s；不需要显卡、OpenGL 或 Blender。
 
 | 选项 | 默认 | 说明 |
 | --- | --- | --- |
-| `--views` | `front,side,top` | 逗号分隔的视图名或 `all` |
+| `--views` | `all`（front, back, side, left, top, bottom） | 逗号分隔的视图名；`iso` 需显式指定 |
 | `--up` | `+y` | 模型的向上轴。glTF 规范是 +Y；Blender / 很多 STL 是 +Z |
 | `--front` | 随 `--up` | 模型正面朝向的轴（+Y 向上时默认 +Z，+Z 向上时默认 -Y） |
 | `--size` | 512 | 渲染分辨率 |
@@ -297,13 +298,13 @@ python -m src.cli fetch-sketchfab https://sketchfab.com/3d-models/coffee-mug-<ui
 **朝向是最容易出错的地方**：两个模型如果「正面」定义不一致（一个 +Z 朝前、一个 -Y 朝前），即使模型一样分数也会很低。
 三种处理方式：
 
-* `--auto-orient`：先枚举 candidate 的全部 24 种轴对齐朝向，渲染低分辨率剪影，选与 reference 三视图 IoU 平均值最高的那一种；
+* `--auto-orient`：先枚举 candidate 的全部 24 种轴对齐朝向，渲染低分辨率剪影，选与 reference 各视图 IoU 平均值最高的那一种；
   再绕选出的向上轴每 10° 扫一圈、在最佳角度附近按 2° 细化（AI 生成的模型通常向上轴是对的，但朝向跟着输入图片的拍摄角度走）。
   选中的 `up` / `front` / `yaw` 和前几名的 IoU 写在 `models.json` 的 `candidate.auto_orient` 里。不处理绕其他轴的倾斜和镜像。
   实测：把一把椅子绕 X、Z 各转 90° 后直接比较只有 63.8 分，加 `--auto-orient` 后恢复到 100 分；
   Tripo v3.1 按 45° 视角图生成的椅子，只做 90° 对齐是 70.2 分，加上任意角度搜索（找到 -42°）后 91.3 分。
 * `--candidate-up` / `--candidate-front` / `--candidate-yaw`：手动为 candidate 指定与 reference 不同的轴和绕向上轴的角度。
-* 先用 `render-views` 分别看一眼三视图，再决定参数。
+* 先用 `render-views` 分别看一眼各视图，再决定参数。
 
 ### 从 Sketchfab 读取模型
 
@@ -334,7 +335,7 @@ python -m src.cli fetch-sketchfab https://sketchfab.com/3d-models/coffee-mug-<ui
 ## AI 复刻模型并打分
 
 `reproduce` 命令完成整条链路：取一个参考模型（本地文件或 Sketchfab）→ 渲染一张图交给 AI 图生 3D 服务（或改用文字提示词）
-→ 下载 AI 生成的模型 → 自动对齐朝向 → 三视图打分。
+→ 下载 AI 生成的模型 → 自动对齐朝向 → 六视图打分。
 
 ```powershell
 # 用参考模型的 3/4 视角渲染图做图生 3D（Meshy）
@@ -407,7 +408,7 @@ python -m src.cli compare-models --reference a.glb --candidate b.glb --config co
 | 轮廓 IoU | 0.15–0.45 | 两个都居中、都铺满画布的图形必然重叠 |
 | Edge | 8–35 分 | 轮廓线总有一部分离得不远 |
 
-`score_floors` 把每个指标的底分减掉再拉伸回 0–100，`score_gamma` 把中段抬高一些，`view_power` 决定三个视图怎么合成一个分：
+`score_floors` 把每个指标的底分减掉再拉伸回 0–100，`score_gamma` 把中段抬高一些，`view_power` 决定六个视图怎么合成一个分：
 
 ```text
 x        = clip((原始分 − floor) / (100 − floor), 0, 1)
@@ -418,7 +419,7 @@ x        = clip((原始分 − floor) / (100 − floor), 0, 1)
 
 * 低于 floor 记 0，100 仍是 100（同一个模型仍然满分）。
 * `score_gamma < 1` 时曲线上凸，「认得出是同一个东西、但比例姿态有出入」的复刻不会被线性刻度压得太低。
-* `view_power < 1` 的幂平均偏向**最差的那个视图**：真正的复刻三个视图都对得上，而不相关的物体经常只在某一个视图上碰巧像
+* `view_power < 1` 的幂平均偏向**最差的那个视图**：真正的复刻每个视图都对得上，而不相关的物体经常只在某一个视图上碰巧像
   （椅子和茶壶从正上方看都是一个圆饼，IoU 0.8）。普通平均下这一对有 24–29 分，幂平均后是 0.2 分。
 * `metrics.json` 同时保留原始分（`*_score`）和校准后的分（`calibrated_scores`），report.png 里多一行 `after floors`。
   `configs/default.yaml` 三个参数都是中性值（无 floors、gamma 1、power 1），行为不变。
@@ -460,14 +461,14 @@ python scripts/summarize_runs.py                 # 扫描 outputs/run_*，写出
 python scripts/summarize_runs.py --sort score
 ```
 
-每行一次运行：比较的两个模型、生成方式（服务 / 图生或文生 / 版本 / 消耗点数）、配置、自动对齐结果、三个视图的分数和综合分。
+每行一次运行：比较的两个模型、生成方式（服务 / 图生或文生 / 版本 / 消耗点数）、配置、自动对齐结果、六个视图的分数和综合分。
 
 ### 怎么解读分数
 
 * AI 生成的模型通常比例、细节和原模型都有差异；同一参考模型下不同服务、不同版本、不同提示词之间的**相对**分数更有意义。
   实测同一把维多利亚椅（Sketchfab `6479a190…`）：Tripo v2.5 图生 3D 91.8 分、v3.1 不带贴图 91.3 分、v1.4 87.9 分。
 * 自动对齐解决轴对齐和绕向上轴的任意旋转。如果生成的模型绕其他轴倾斜，或左右镜像了，分数会偏低，需要自己在建模软件里转正后用 `--candidate` 传入。
-* 三视图看不到内部结构，贴图和颜色也不参与打分。
+* 六个正交视图看不到内部结构和被遮挡的凹陷，贴图和颜色也不参与打分。
 
 ---
 
@@ -603,8 +604,8 @@ outputs/run_YYYYMMDD_HHMMSS/
 ├── comparisons/        每对图片一张：reference | candidate | 差异图 | 指标
 ├── metrics.json        全部原始数值 + 分组分数 + 配置
 ├── metrics.csv         每行一对图片，然后是 __group__:<物体> 行，最后一行 __overall__
-├── report_<物体>.png   每个物体一张：三视图逐行对比（多物体命名时）
-└── report.png          多物体：一页汇总表；单物体：该物体的三视图报告
+├── report_<物体>.png   每个物体一张：各视图逐行对比（多物体命名时）
+└── report.png          多物体：一页汇总表；单物体：该物体的逐视图报告
                         （一张报告的行数超过 report_pairs_per_page 时才会分页为 *_page02.png）
 ```
 
@@ -725,7 +726,7 @@ API token（Sketchfab 下载、`reproduce` / `generate-model` 需要）：把 `.
 * **权重（0.40 / 0.30 / 0.20 / 0.10）是初始设定，需要通过人工评价数据进一步校准。** 建议收集一批人工打分的图片对，再调整权重使综合分数与人工判断相关性最高。
 * 不同视角（不同文件名）的图片不会互相比较；overall_score 只是各对分数的平均，并不代表任何跨视角的一致性。
 * Silhouette IoU 依赖可靠的前景 mask（alpha 通道或纯色背景）。没有可靠 mask 时该指标为 `null`，而不是伪造一个数值。
-* **三维模型对比仍然是二维图片相似度。** 三视图能反映外形轮廓和大体结构，但看不到被遮挡的内部结构；
+* **三维模型对比仍然是二维图片相似度。** 六视图能反映外形轮廓和大体结构，但看不到内部结构；
   两个模型的朝向、单位必须先统一（见[三维模型对比](#三维模型对比)），否则分数没有意义。渲染没有贴图和材质，只比较几何。
 
 ---
@@ -760,7 +761,7 @@ image_similarity_benchmark/
 │   ├── reporting.py          metrics.json / metrics.csv / comparison / report.png
 │   ├── synthetic.py          合成测试图片生成器（抽象形状 + 单物体三视图）
 │   ├── objects.py            多物体测试用例：基本体拼装 + 正交三视图渲染
-│   ├── render.py             三维网格加载、姿态归一化、numpy 正交光栅化三视图（含 iso 视角）
+│   ├── render.py             三维网格加载、姿态归一化、numpy 正交光栅化六视图（含 iso 视角）
 │   ├── orient.py             枚举 24 种朝向、按剪影 IoU 自动对齐 candidate
 │   ├── generate.py           Meshy / Tripo 图生 3D、文生 3D 客户端（创建任务、轮询、下载）
 │   └── sketchfab.py          Sketchfab Data / Download API 客户端（下载 + 缓存）

@@ -201,6 +201,9 @@ def test_identical_models_render_identically(mesh_file: Path, tmp_path: Path) ->
 def test_parse_views_and_option_validation() -> None:
     assert parse_views("front, TOP,front") == ("front", "top")
     assert parse_views("all") == ("front", "back", "side", "left", "top", "bottom")
+    from src.render import DEFAULT_VIEWS
+
+    assert DEFAULT_VIEWS == parse_views("all")  # six views by default
     with pytest.raises(RenderError):
         parse_views("front,diagonal")
     with pytest.raises(RenderError):
