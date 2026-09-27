@@ -2,6 +2,11 @@
 # docker compose run --rm benchmark                          # run the test suite
 # docker compose run --rm benchmark python -m src.cli compare-models \
 #     --reference models/a.glb --candidate models/b.glb --auto-orient
+#
+# docker compose up -d blender                               # headless Blender + MCP over HTTP
+#     MCP endpoint for remote agents: http://<this host>:8000/mcp
+#     glb files exported to /app/models inside Blender land in ./models on the host,
+#     ready for `compare-models` above.
 services:
   benchmark:
     image: imgsim
@@ -19,3 +24,28 @@ services:
       - ./data:/app/data
       - ./models:/app/models
       - ./outputs:/app/outputs
+
+  blender:
+    image: imgsim-blender
+    build: docker/blender
+    ports:
+      - "${BLENDER_MCP_PORT:-8000}:8000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Which addon integrations to switch on in the scene (comma-separated):
+      # polyhaven,sketchfab,polypizza,hyper3d,hunyuan3d,tripo
+      - BLENDERMCP_INTEGRATIONS=${BLENDERMCP_INTEGRATIONS:-polyhaven,sketchfab}
+      # The addon reads its own variable names; reuse the benchmark's Sketchfab token.
+      - BLENDERMCP_SKETCHFAB_API_KEY=${SKETCHFAB_API_TOKEN:-}
+      - BLENDERMCP_HYPER3D_API_KEY
+      - BLENDERMCP_POLYPIZZA_API_KEY
+      # Restrict accepted Host headers (DNS-rebinding protection), e.g. "myhost.example.com:*"
+      - MCP_ALLOWED_HOSTS
+      # Validate scripts before running them in Blender (see upstream README "safe mode")
+      - BLENDER_MCP_SAFE_MODE
+    volumes:
+      - ./models:/app/models
+      - ./outputs:/app/outputs
+    restart: unless-stopped

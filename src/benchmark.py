@@ -23,6 +23,7 @@ from typing import Any, Sequence
 import numpy as np
 
 from . import reporting
+from .complexity import apply_penalties
 from .alignment import align_candidate
 from .config import BenchmarkConfig, METRIC_NAMES
 from .metrics import (
@@ -133,6 +134,13 @@ class BenchmarkResult:
     config: dict[str, Any]
     skipped_unmatched: dict[str, list[str]] = field(default_factory=dict)
     group_scores: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # 3D model runs only: the image-based score before the face-count term is
+    # blended in (equals overall_score when mesh_complexity.weight is 0) and
+    # the face-count comparison itself (see src.complexity.mesh_complexity).
+    shape_score: float | None = None
+    mesh: dict[str, Any] | None = None
+    # 3D model runs only: rig / animation comparison (see src.rig.rig_comparison)
+    rig: dict[str, Any] | None = None
 
     @property
     def valid_pairs(self) -> list[PairResult]:
@@ -142,6 +150,9 @@ class BenchmarkResult:
         return {
             "pairs": {p.name: p.to_dict() for p in self.pairs},
             "overall_score": self.overall_score,
+            "shape_score": self.shape_score,
+            "mesh": self.mesh,
+            "rig": self.rig,
             "group_scores": self.group_scores,
             "num_pairs": len(self.pairs),
             "num_valid_pairs": len(self.valid_pairs),
@@ -368,6 +379,8 @@ class BenchmarkRunner:
         output_root: str | Path | None,
         skip_unmatched: bool | None = None,
         run_dir: str | Path | None = None,
+        mesh_complexity: dict[str, Any] | None = None,
+        rig: dict[str, Any] | None = None,
     ) -> BenchmarkResult:
         """Run the full benchmark over two folders.
 
@@ -404,6 +417,25 @@ class BenchmarkRunner:
             overall = float(np.mean([g["score"] for g in groups.values()]))
         else:
             overall = compute_overall_score(results, power)
+        shape_score = None
+        if mesh_complexity is not None or rig is not None:
+            # 3D model run: the image score becomes shape_score and the face
+            # count / rig terms are applied as penalties with their weights.
+            shape_score = overall
+            overall = apply_penalties(overall, [mesh_complexity, rig])
+            if mesh_complexity is not None:
+                logger.info(
+                    "Mesh faces: reference %d, candidate %d (ratio %.3g) -> mesh score %.1f, weight %.2f",
+                    mesh_complexity["reference"]["faces"], mesh_complexity["candidate"]["faces"],
+                    mesh_complexity["face_ratio"] if mesh_complexity["face_ratio"] is not None else float("inf"),
+                    mesh_complexity["score"], mesh_complexity["weight"],
+                )
+            if rig is not None:
+                if rig.get("applicable"):
+                    comps = ", ".join(f"{k} {v:.0f}" for k, v in rig["components"].items())
+                    logger.info("Rig score %.1f (%s), weight %.2f", rig["score"], comps, rig["weight"])
+                else:
+                    logger.info("Reference has no rig; rig term not applied")
         bench = BenchmarkResult(
             pairs=results,
             overall_score=overall,
@@ -411,6 +443,9 @@ class BenchmarkRunner:
             config=self.config.to_dict(),
             skipped_unmatched=skipped,
             group_scores=groups,
+            shape_score=shape_score,
+            mesh=mesh_complexity,
+            rig=rig,
         )
         for group, info in groups.items():
             logger.info("Group %s: score %.2f over %d pair(s)", group, info["score"], info["num_pairs"])

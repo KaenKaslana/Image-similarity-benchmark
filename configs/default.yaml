@@ -109,6 +109,27 @@ weights:
 # ---------------------------------------------------------------------------
 # Output
 # ---------------------------------------------------------------------------
+# Face-count term used by compare-models / reproduce (ignored by image-only
+# runs). overall = shape_score * (1 - weight * (1 - mesh_score / 100)), where
+# mesh_score is 100 while |log2(candidate_faces / reference_faces)| <= free_log2
+# and falls linearly to 0 at zero_log2. weight 0 = report the counts only.
+mesh_complexity:
+  weight: 0.0
+  free_log2: 1.0
+  zero_log2: 5.0
+
+# Rig / animation term used by compare-models / reproduce when the reference
+# model is rigged (glTF skins): overall = shape_score * (1 - weight * (1 - rig_score / 100)).
+# See configs/shape.yaml for the meaning of each key. weight 0 = report only.
+rig:
+  weight: 0.0
+  bone_free_log2: 1.0
+  bone_zero_log2: 4.0
+  motion_free_log2: 1.0
+  motion_zero_log2: 4.0
+  skeleton_max_distance: 0.25
+  motion_samples: 8
+
 output:
   # Save the preprocessed images so they can be inspected manually.
   save_preprocessed: true

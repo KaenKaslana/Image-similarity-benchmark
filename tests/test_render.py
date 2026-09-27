@@ -244,12 +244,27 @@ def test_cli_render_views_and_compare_models(mesh_file: Path, tmp_path: Path, ca
     metrics = json.loads((run / "metrics.json").read_text())
     assert 0 < metrics["overall_score"] < 100
     assert metrics["configuration"]["preprocessing"]["crop_mode"] == "foreground_bbox"  # shape.yaml is the default
+    # face-count term: the candidate is two boxes (24 triangles); the fixture has a similar count,
+    # so the ratio sits inside the free band and the mesh score is 100.
+    ref_faces = len(trimesh.load(mesh_file, force="mesh").faces)
+    mesh = metrics["mesh"]
+    assert mesh["reference"]["faces"] == ref_faces and mesh["candidate"]["faces"] == 24
+    assert mesh["score"] == 100.0 and mesh["weight"] == metrics["configuration"]["mesh_complexity"]["weight"]
+    assert metrics["shape_score"] == pytest.approx(metrics["overall_score"])  # mesh score 100 leaves the blend unchanged
+    assert "shape_score" in printed and f"faces {ref_faces} vs 24" in printed
+    csv_text = (run / "metrics.csv").read_text()
+    assert "__shape__" in csv_text and "__mesh__" in csv_text and "__rig__" in csv_text
+    # static reference (no skin): the rig term is reported but not applied
+    assert metrics["rig"]["applicable"] is False and metrics["rig"]["score"] is None
+    assert metrics["rig"]["candidate"]["has_skin"] is False
+    assert "reference has no rig" in printed
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
     from summarize_runs import summarize_run, write_tables
 
     row = summarize_run(run)
     assert row["reference"] == "handle" and row["candidate"] == "variant" and row["overall"] == metrics["overall_score"]
+    assert row["faces"] == f"{ref_faces}/24" and row["mesh"] == 100.0 and row["shape"] == metrics["shape_score"]
     assert row["orientation"].startswith("manual")
     md, csv_path = write_tables([row], runs)
     assert "handle" in md.read_text() and csv_path.read_text().count("\n") == 2

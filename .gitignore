@@ -30,3 +30,6 @@ data/reference/*
 data/candidate/*
 !data/reference/.gitkeep
 !data/candidate/.gitkeep
+
+# Blender MCP smoke-test screenshot (scripts/blender_mcp_smoke.py)
+outputs/mcp_smoke.png

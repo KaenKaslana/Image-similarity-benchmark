@@ -27,7 +27,7 @@ from src.cli import describe_model  # noqa: E402
 
 COLUMNS = [
     "run", "reference", "candidate", "generation", "credits", "config", "orientation",
-    "front", "back", "side", "left", "top", "bottom", "overall",
+    "front", "back", "side", "left", "top", "bottom", "shape", "faces", "mesh", "rig", "overall",
 ]
 
 
@@ -84,9 +84,33 @@ def summarize_run(run_dir: Path) -> dict | None:
         "config": _config_name(metrics.get("configuration") or {}),
         "orientation": orientation,
         **{v: per_view.get(v) for v in ("front", "back", "side", "left", "top", "bottom")},
+        # Runs before the face-count term have no shape_score: their overall
+        # score IS the shape score.
+        "shape": metrics.get("shape_score") if metrics.get("shape_score") is not None else metrics.get("overall_score"),
+        "faces": _faces(metrics.get("mesh")),
+        "mesh": (metrics.get("mesh") or {}).get("score"),
+        "rig": _rig(metrics.get("rig")),
         "overall": metrics.get("overall_score"),
     }
     return row
+
+
+def _rig(rig: dict | None):
+    """Rig score, ``-`` when the reference has no rig or the run predates the term."""
+    if not rig or not rig.get("applicable"):
+        return "-"
+    return rig.get("score")
+
+
+def _faces(mesh: dict | None) -> str:
+    """``reference/candidate`` face counts, e.g. ``12.3k/98k``."""
+    if not mesh:
+        return "-"
+
+    def k(n: int) -> str:
+        return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
+
+    return f"{k(mesh['reference']['faces'])}/{k(mesh['candidate']['faces'])}"
 
 
 def _fmt(v) -> str:

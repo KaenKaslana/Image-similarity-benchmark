@@ -22,6 +22,9 @@ import tempfile
 from pathlib import Path
 
 from .benchmark import BenchmarkResult, BenchmarkRunner, PairingError, compute_overall_score, slugify
+from .complexity import MeshStats, mesh_complexity
+from .render import canonical_rotation, yaw_matrix
+from .rig import analyse_rig, rig_comparison, summarize_rig
 from .config import ALIGNMENT_METHODS, BenchmarkConfig, ConfigError, CROP_MODES, DEVICES, load_config
 from .generate import GenerationError, GenerationRequest, PROVIDERS, get_provider, parse_options, tripo_balance
 from .orient import apply_orientation, auto_orient
@@ -122,6 +125,11 @@ def build_parser() -> argparse.ArgumentParser:
     _add_orient_args(p_models)
     _add_sketchfab_args(p_models)
 
+    p_rig = sub.add_parser("rig-info", help="Print skeleton / skinning / animation facts of a glTF or GLB model as JSON")
+    p_rig.add_argument("--model", required=True, type=Path, help="Mesh file (.glb / .gltf)")
+    p_rig.add_argument("--motion-samples", type=int, default=8, help="Poses of the longest clip to evaluate (default: 8)")
+    p_rig.add_argument("--log-level", default="INFO")
+
     p_gen = sub.add_parser(
         "generate-model",
         help="Ask an AI service (Meshy / Tripo) to generate a 3D model from an image or a prompt; prints the GLB path",
@@ -168,6 +176,20 @@ def _add_model_benchmark_args(parser: argparse.ArgumentParser) -> None:
         type=Path,
         default=None,
         help=f"YAML config for the image benchmark (default: {SHAPE_CONFIG.relative_to(PROJECT_ROOT)}, shape-first)",
+    )
+    parser.add_argument(
+        "--mesh-weight",
+        type=float,
+        default=None,
+        help="Override mesh_complexity.weight: share (0-1) of the overall score taken by the face-count "
+        "comparison; 0 only reports the face counts",
+    )
+    parser.add_argument(
+        "--rig-weight",
+        type=float,
+        default=None,
+        help="Override rig.weight: largest share (0-1) of the score the rig/animation comparison can take away "
+        "when the reference is rigged; 0 only reports the rig facts",
     )
     parser.add_argument("--crop-mode", choices=CROP_MODES, default=None, help="Override preprocessing.crop_mode")
     parser.add_argument("--alignment", choices=ALIGNMENT_METHODS, default=None, help="Override preprocessing.alignment")
@@ -331,6 +353,10 @@ def load_effective_config(args: argparse.Namespace, default: Path = DEFAULT_CONF
         cfg.metrics.lpips.device = args.device
     if getattr(args, "skip_unmatched", False):
         cfg.input.skip_unmatched = True
+    if getattr(args, "mesh_weight", None) is not None:
+        cfg.mesh_complexity.weight = float(args.mesh_weight)
+    if getattr(args, "rig_weight", None) is not None:
+        cfg.rig.weight = float(args.rig_weight)
     if args.log_level is not None:
         cfg.output.log_level = args.log_level
     cfg.validate()
@@ -440,7 +466,26 @@ def run_model_comparison(
         render_views(ref_mesh, ref_dir, opts)
         logger.info("Rendering candidate model %s", cand_path)
         render_views(cand_mesh, cand_dir, opts)
-        result = BenchmarkRunner(cfg).run(ref_dir, cand_dir, None, run_dir=run_dir)
+        mesh_info = mesh_complexity(
+            MeshStats(faces=len(ref_mesh.faces), vertices=len(ref_mesh.vertices)),
+            MeshStats(faces=len(cand_mesh.faces), vertices=len(cand_mesh.vertices)),
+            cfg.mesh_complexity,
+        )
+        # Rig / animation: compare the skeletons in the same orientation as the renders.
+        if orient_info:
+            c_up, c_front, c_yaw = orient_info["up"], orient_info["front"], float(orient_info["yaw"])
+        else:
+            c_up, c_front, c_yaw = cand_up or opts.up, cand_front or opts.front, float(cand_yaw)
+        rig_info = rig_comparison(
+            analyse_rig(ref_path, cfg.rig.motion_samples),
+            analyse_rig(cand_path, cfg.rig.motion_samples),
+            cfg.rig,
+            ref_rotation=canonical_rotation(opts.up, opts.front),
+            cand_rotation=yaw_matrix(c_yaw) @ canonical_rotation(c_up, c_front),
+        )
+        result = BenchmarkRunner(cfg).run(
+            ref_dir, cand_dir, None, run_dir=run_dir, mesh_complexity=mesh_info, rig=rig_info
+        )
 
     if run_dir is not None:
         if orient_info:
@@ -464,6 +509,14 @@ def _print_result(result: BenchmarkResult) -> int:
     if result.run_dir is not None:
         print(f"\nOutputs written to: {result.run_dir}")
     return 0 if result.overall_score is not None else 1
+
+
+def cmd_rig_info(args: argparse.Namespace) -> int:
+    setup_logging(args.log_level)
+    info = analyse_rig(args.model, args.motion_samples)
+    print(json.dumps(info.to_dict(), indent=2))
+    print(f"\n{args.model.name}: {summarize_rig(info)}", file=sys.stderr)
+    return 0 if info.readable else 1
 
 
 def cmd_compare_models(args: argparse.Namespace) -> int:
@@ -575,6 +628,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_compare_pair(args)
         if args.command == "render-views":
             return cmd_render_views(args)
+        if args.command == "rig-info":
+            return cmd_rig_info(args)
         if args.command == "compare-models":
             return cmd_compare_models(args)
         if args.command == "fetch-sketchfab":

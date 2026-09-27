@@ -78,6 +78,41 @@ view_power: 0.25
 #   identical 100 | mild / medium / strong deformation 93 / 76 / 46 |
 #   Tripo image-to-3D 88 | Tripo text-to-3D 52 |
 #   different model of the same category 47 | unrelated 3 (90th percentile 23)
+# (these are the image-only scores, reported as shape_score since the
+# mesh_complexity term was added)
+
+# Face-count term (compare-models / reproduce only). The image metrics cannot
+# tell a 200-face blocky copy from a 200k-face replica of the same outline, so
+# the ratio candidate_faces / reference_faces (both triangulated by trimesh)
+# is scored on a log2 scale and applied as a penalty on the shape score:
+#   overall = shape_score * (1 - weight * (1 - mesh_score / 100))
+#   |log2 ratio| <= free_log2  -> mesh_score 100, overall = shape_score
+#   |log2 ratio| >= zero_log2  -> mesh_score 0,   overall = shape_score * (1 - weight)
+# i.e. a face count within a factor 2 costs nothing, a factor 32 either way
+# costs 15 %. weight 0 keeps the old overall_score and only reports the counts.
+mesh_complexity:
+  weight: 0.15
+  free_log2: 1.0
+  zero_log2: 5.0
+
+# Rig / animation term (compare-models / reproduce; only when the REFERENCE is
+# rigged, i.e. a character / creature / machine with glTF skins). Reads the
+# skeleton, vertex weights and animation clips of both files and poses the
+# candidate with its longest clip to measure motion. rig_score 0-100 is a
+# weighted mix of: bone-count ratio (0.15), joint placement vs the reference
+# skeleton (0.25), weight coverage (0.15), animated share of the skeleton
+# relative to the reference (0.25) and motion amplitude ratio (0.20); the two
+# animation parts are dropped when the reference itself has no clips. A
+# candidate without a skeleton scores 0. Applied like mesh_complexity:
+#   overall = shape_score * (1 - weight * (1 - rig_score / 100))
+rig:
+  weight: 0.20
+  bone_free_log2: 1.0            # bone count within 2x of the reference: full marks
+  bone_zero_log2: 4.0            # 16x either way: 0
+  motion_free_log2: 1.0          # mean vertex motion within 2x of the reference: full marks
+  motion_zero_log2: 4.0
+  skeleton_max_distance: 0.25    # mean joint distance (in model extents) at which placement scores 0
+  motion_samples: 8              # poses of the longest clip evaluated with linear blend skinning
 
 output:
   save_preprocessed: true

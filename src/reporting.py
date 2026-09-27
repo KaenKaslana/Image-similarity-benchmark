@@ -50,6 +50,29 @@ def _fmt(value: float | None, digits: int = 2, na: str = "n/a") -> str:
     return f"{value:.{digits}f}"
 
 
+def _mesh_caption(result: "BenchmarkResult") -> str:
+    """Extra title line for 3D model runs: shape score and face counts."""
+    if result.mesh is None and result.rig is None:
+        return ""
+    text = f"\nshape score {_fmt(result.shape_score)}"
+    if result.mesh is not None:
+        m = result.mesh
+        text += (
+            f" | faces: reference {m['reference']['faces']:,}, candidate {m['candidate']['faces']:,}"
+            f" (x{_fmt(m['face_ratio'], 3)}) -> mesh score {_fmt(m['score'])} at weight {m['weight']:.2f}"
+        )
+    if result.rig is not None:
+        r = result.rig
+        if r.get("applicable"):
+            text += (
+                f"\nrig score {_fmt(r['score'])} at weight {r['weight']:.2f} | reference {_rig_brief(r['reference'])}"
+                f" | candidate {_rig_brief(r['candidate'])}"
+            )
+        else:
+            text += f"\nrig: reference has no rig (not applied); candidate {_rig_brief(r['candidate'])}"
+    return text
+
+
 # ---------------------------------------------------------------------------
 # Tabular outputs
 # ---------------------------------------------------------------------------
@@ -81,9 +104,43 @@ def save_metrics_csv(result: "BenchmarkResult", path: str | Path) -> Path:
             writer.writerow({k: ("" if v is None else v) for k, v in row.items()})
         for group, info in result.group_scores.items():
             writer.writerow({"name": f"__group__:{group}", "pair_score": info["score"]})
+        if result.mesh is not None or result.rig is not None:
+            writer.writerow({"name": "__shape__", "pair_score": "" if result.shape_score is None else result.shape_score})
+        if result.rig is not None:
+            r = result.rig
+            writer.writerow({
+                "name": "__rig__",
+                "pair_score": "" if r.get("score") is None else r["score"],
+                "unavailable_metrics": "" if r.get("applicable") else "reference has no rig",
+                "reference_path": _rig_brief(r.get("reference")),
+                "candidate_path": _rig_brief(r.get("candidate")),
+            })
+            writer.writerow({
+                "name": "__mesh__",
+                "pair_score": result.mesh["score"],
+                "reference_path": f"faces={result.mesh['reference']['faces']}",
+                "candidate_path": f"faces={result.mesh['candidate']['faces']}",
+            })
         writer.writerow({"name": "__overall__", "pair_score": "" if result.overall_score is None else result.overall_score})
     logger.info("Wrote %s", path)
     return path
+
+
+def _rig_brief(info: dict | None) -> str:
+    """``bones=58 clips=1 motion=0.067`` for the CSV / captions."""
+    if not info:
+        return ""
+    if not info.get("readable", True):
+        return "unreadable"
+    if not info.get("has_skin"):
+        return "no rig"
+    motion = info.get("motion_amplitude")
+    s = f"bones={info['joints']} clips={len(info.get('clips', []))}"
+    if motion is not None:
+        s += f" motion={motion:.3f}"
+    if info.get("deformation_ok") is False:
+        s += " BROKEN"
+    return s
 
 
 # ---------------------------------------------------------------------------
@@ -265,7 +322,8 @@ def save_summary_report(result: "BenchmarkResult", path: str | Path) -> Path:
         ax.set_title(
             f"Image similarity benchmark - overall score: {_fmt(result.overall_score)}"
             f"  ({len(result.valid_pairs)}/{len(result.pairs)} valid pairs, {len(groups)} objects)\n"
-            "pair scores per view (0-100); object score = mean of its views; overall = mean of all valid pairs",
+            "pair scores per view (0-100); object score = mean of its views; overall = mean of all valid pairs"
+            + _mesh_caption(result),
             fontsize=11,
             fontweight="bold",
         )
@@ -311,7 +369,7 @@ def save_report(result: "BenchmarkResult", run_dir: str | Path, pairs_per_page: 
     else:
         title = (
             f"Image similarity benchmark - overall score: {_fmt(result.overall_score)}"
-            f"  ({len(result.valid_pairs)}/{len(pairs)} valid pairs)"
+            f"  ({len(result.valid_pairs)}/{len(pairs)} valid pairs)" + _mesh_caption(result)
         )
         written += _render_pages(pairs, title, run_dir, "report", pairs_per_page, [view_name(p.name, "") for p in pairs])
 
@@ -339,6 +397,24 @@ def format_summary_table(result: "BenchmarkResult") -> str:
         label = f"[{group}] ({info['num_pairs']} views)"
         lines.append(f"{label[:24]:<24} {'':>7} {'':>7} {'':>7} {'':>7} {_fmt(info['score']):>7}")
     if result.group_scores:
+        lines.append("-" * len(header))
+    if result.mesh is not None:
+        m = result.mesh
+        lines.append(f"{'shape_score':<24} {'':>7} {'':>7} {'':>7} {'':>7} {_fmt(result.shape_score):>7}")
+        faces = f"faces {m['reference']['faces']:,} vs {m['candidate']['faces']:,} (x{_fmt(m['face_ratio'], 3)})"
+        lines.append(f"{'mesh_score':<24} {faces:<31} {_fmt(m['score']):>7}   weight {m['weight']:.2f}")
+    if result.rig is not None:
+        r = result.rig
+        if result.mesh is None:
+            lines.append(f"{'shape_score':<24} {'':>7} {'':>7} {'':>7} {'':>7} {_fmt(result.shape_score):>7}")
+        if r.get("applicable"):
+            comps = " ".join(f"{k[:4]} {v:.0f}" for k, v in r["components"].items())
+            lines.append(f"{'rig_score':<24} {comps:<31} {_fmt(r['score']):>7}   weight {r['weight']:.2f}")
+            lines.append(f"{'  reference':<24} {_rig_brief(r['reference'])}")
+            lines.append(f"{'  candidate':<24} {_rig_brief(r['candidate'])}")
+        else:
+            lines.append(f"{'rig_score':<24} {'reference has no rig (not applied); candidate: ' + _rig_brief(r['candidate'])}")
+    if result.mesh is not None or result.rig is not None:
         lines.append("-" * len(header))
     lines.append(f"{'overall_score':<24} {'':>7} {'':>7} {'':>7} {'':>7} {_fmt(result.overall_score):>7}")
     return "\n".join(lines)

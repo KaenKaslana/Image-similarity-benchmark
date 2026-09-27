@@ -175,6 +175,79 @@ class OutputConfig:
 
 
 @dataclass
+class MeshComplexityConfig:
+    """Face-count term of ``compare-models`` / ``reproduce`` (see :mod:`src.complexity`).
+
+    ``weight`` is the largest fraction of the shape score the face-count term
+    can take away: ``overall = shape_score * (1 - weight * (1 - mesh_score / 100))``.
+    0 (the default) only reports the counts. ``free_log2`` is the band of
+    ``|log2(candidate_faces / reference_faces)|`` that scores 100 and
+    ``zero_log2`` the distance at which the score reaches 0. Image-only
+    ``compare`` runs ignore this section.
+    """
+
+    weight: float = 0.0
+    free_log2: float = 1.0
+    zero_log2: float = 5.0
+
+    def validate(self) -> None:
+        for name in ("weight", "free_log2", "zero_log2"):
+            v = getattr(self, name)
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                raise ConfigError(f"mesh_complexity.{name} must be a number, got {v!r}")
+            setattr(self, name, float(v))
+        if not 0.0 <= self.weight <= 1.0:
+            raise ConfigError(f"mesh_complexity.weight must be in [0, 1], got {self.weight}")
+        if self.free_log2 < 0:
+            raise ConfigError(f"mesh_complexity.free_log2 must be >= 0, got {self.free_log2}")
+        if self.zero_log2 <= self.free_log2:
+            raise ConfigError(
+                f"mesh_complexity.zero_log2 ({self.zero_log2}) must be greater than free_log2 ({self.free_log2})"
+            )
+
+
+@dataclass
+class RigConfig:
+    """Rig / animation term of ``compare-models`` / ``reproduce`` (see :mod:`src.rig`).
+
+    Applied only when the reference model is rigged. ``weight`` is the
+    largest fraction of the shape score the rig term can take away:
+    ``overall = shape_score * (1 - weight * (1 - rig_score / 100))``; 0 (the
+    default) only reports the rig facts. The ``*_log2`` pairs define the
+    free band / zero point of the bone-count and motion-amplitude ratios
+    (candidate / reference) like ``mesh_complexity``; ``skeleton_max_distance``
+    is the Chamfer distance between joint positions (in units of the model's
+    extent) at which the skeleton-placement score reaches 0;
+    ``motion_samples`` is how many poses of the longest clip are evaluated.
+    """
+
+    weight: float = 0.0
+    bone_free_log2: float = 1.0
+    bone_zero_log2: float = 4.0
+    motion_free_log2: float = 1.0
+    motion_zero_log2: float = 4.0
+    skeleton_max_distance: float = 0.25
+    motion_samples: int = 8
+
+    def validate(self) -> None:
+        for name in ("weight", "bone_free_log2", "bone_zero_log2", "motion_free_log2", "motion_zero_log2",
+                     "skeleton_max_distance"):
+            v = getattr(self, name)
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                raise ConfigError(f"rig.{name} must be a number, got {v!r}")
+            setattr(self, name, float(v))
+        if not 0.0 <= self.weight <= 1.0:
+            raise ConfigError(f"rig.weight must be in [0, 1], got {self.weight}")
+        for free, zero in (("bone_free_log2", "bone_zero_log2"), ("motion_free_log2", "motion_zero_log2")):
+            if getattr(self, free) < 0 or getattr(self, zero) <= getattr(self, free):
+                raise ConfigError(f"rig.{zero} must be greater than rig.{free} (>= 0)")
+        if self.skeleton_max_distance <= 0:
+            raise ConfigError(f"rig.skeleton_max_distance must be > 0, got {self.skeleton_max_distance}")
+        if isinstance(self.motion_samples, bool) or not isinstance(self.motion_samples, int) or self.motion_samples < 1:
+            raise ConfigError(f"rig.motion_samples must be a positive integer, got {self.motion_samples!r}")
+
+
+@dataclass
 class BenchmarkConfig:
     """Top-level validated configuration."""
 
@@ -197,12 +270,18 @@ class BenchmarkConfig:
     # view, because a real replica matches in every view while unrelated
     # objects often coincide in one (two round blobs seen from the top).
     view_power: float = 1.0
+    # Face-count term for 3D model comparisons; see MeshComplexityConfig.
+    mesh_complexity: MeshComplexityConfig = field(default_factory=MeshComplexityConfig)
+    # Rig / animation term for 3D model comparisons; see RigConfig.
+    rig: RigConfig = field(default_factory=RigConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
 
     def validate(self) -> None:
         self.input.validate()
         self.preprocessing.validate()
         self.metrics.validate()
+        self.mesh_complexity.validate()
+        self.rig.validate()
         self.weights = validate_weights(self.weights)
         self.score_floors = validate_score_floors(self.score_floors)
         if isinstance(self.score_gamma, bool) or not isinstance(self.score_gamma, (int, float)):
@@ -313,6 +392,8 @@ _NESTED: dict[tuple[type, str], type] = {
     (BenchmarkConfig, "preprocessing"): PreprocessingConfig,
     (BenchmarkConfig, "metrics"): MetricsConfig,
     (BenchmarkConfig, "output"): OutputConfig,
+    (BenchmarkConfig, "mesh_complexity"): MeshComplexityConfig,
+    (BenchmarkConfig, "rig"): RigConfig,
     (MetricsConfig, "ssim"): SSIMConfig,
     (MetricsConfig, "lpips"): LPIPSConfig,
     (MetricsConfig, "edge"): EdgeConfig,

@@ -272,7 +272,55 @@ python -m src.cli fetch-sketchfab https://sketchfab.com/3d-models/coffee-mug-<ui
 * `renders/reference/` 与 `renders/candidate/`：渲染出的 `front.png` / `back.png` / `side.png` / `left.png` / `top.png` / `bottom.png`（RGBA、透明背景）及 `views.json`（渲染参数与网格统计）；
 * `models.json`：两个模型的来源（本地路径或 Sketchfab 元数据：名称、作者、许可证）。
 
-其余文件（`metrics.json`、`report.png` 等）与 `compare` 完全相同。
+其余文件（`metrics.json`、`report.png` 等）与 `compare` 完全相同，另外多出面数相关的三项（见下节）。
+
+### 面数（mesh_complexity）
+
+图片指标只看轮廓和明暗，200 个面的方块杯子和 20 万面的精细杯子只要外形一致分数就一样。所以 `compare-models` / `reproduce`
+会额外比较两个网格的面数（trimesh 加载后的三角面数，多部件已合并；参考模型如果是四边面，同样按三角化后的数量算）：
+
+```text
+shape_score                                                64.65        # 纯图片分，和以前的 overall_score 含义相同
+mesh_score               faces 1,032 vs 1,532 (x1.484)    100.00   weight 0.15
+overall_score                                              64.65
+```
+
+* `mesh_score`（0–100）由 `候选面数 / 参考面数` 的 log2 值决定：相差不到 2 倍得 100，之后线性下降，相差 32 倍（任一方向）得 0。
+  面数太少（欠建模）和太多（AI 扫描式稠密网格）受同样的惩罚。
+* `overall_score = shape_score × (1 − weight × (1 − mesh_score / 100))`：面数匹配时分数不变，相差 32 倍最多扣 `weight` 的比例
+  （`configs/shape.yaml` 默认 0.15，即最多扣 15%）。用乘法而不是加权平均，是为了不破坏已校准的 shape 分数尺度（相同 100、无关约 3）。
+* `metrics.json` 多出 `shape_score` 和 `mesh`（两边的面数、顶点数、`face_ratio`、`score`、`weight`），
+  `metrics.csv` 多出 `__shape__` 和 `__mesh__` 两行，`report.png` 标题多一行面数信息，`outputs/results.md` 多 `shape` / `faces` / `mesh` 三列。
+* `--mesh-weight 0` 只报告面数不计分（老的 `overall_score` 行为）；也可以在 YAML 里改 `mesh_complexity.weight` / `free_log2` / `zero_log2`。
+  纯图片的 `compare` 命令不受影响。
+
+### 骨骼与动画（rig）
+
+人物、龙、机甲这类会动的参考模型通常带骨骼（glTF `skins`）、顶点权重和动画片段。渲染只看静止姿态，所以 `compare-models` /
+`reproduce` 会直接解析两个 glb/gltf 的结构，在**参考模型有骨骼时**给候选模型打一个 `rig_score`（0–100）：
+
+```text
+rig_score                bone 53 skel 53 skin 100 anim 100 moti 83   77.99   weight 0.20
+  reference              bones=58 clips=1 motion=0.067
+  candidate              bones=11 clips=1 motion=0.024
+```
+
+| 分项 | 权重 | 含义 |
+| --- | --- | --- |
+| `bones` | 0.15 | 骨骼数量比（候选/参考）按 log2 打分：2 倍以内 100，16 倍归 0 |
+| `skeleton` | 0.25 | 骨骼位置：两副骨架放进和渲染相同的坐标系（同样的 up/front/yaw、按包围盒归一化）后，关节点集的 Chamfer 距离；0 得 100，`skeleton_max_distance`（默认 0.25 个模型尺寸）归 0 |
+| `skinning` | 0.15 | 候选模型蒙皮顶点里权重非零且归一化的比例 |
+| `animation` | 0.25 | 候选模型动画覆盖的骨骼比例相对参考的比例（参考没有动画时此项和下一项不计） |
+| `motion` | 0.20 | 用线性混合蒙皮把候选模型摆到最长片段的 8 个姿态，算平均顶点位移（除以模型尺寸），和参考的比值按 log2 打分；姿态爆炸或出现 NaN 时动画两项记 0 |
+
+* 没有骨骼的候选模型 `rig_score` 为 0；参考模型本身没骨骼（杯子）时只报告候选的情况、不计分。
+* 合成方式同面数：`overall = shape_score × (1 − weight × (1 − rig_score/100))`，`configs/shape.yaml` 默认 weight 0.20，最多扣 20%。
+  `--rig-weight 0` 只报告不计分。
+* `python -m src.cli rig-info --model x.glb` 单独打印一个模型的骨骼 / 蒙皮 / 动画信息（JSON）。
+* `metrics.json` 的 `rig` 里有 `applicable`、`score`、各分项 `components`、`skeleton_chamfer` 和两边的完整信息；
+  `metrics.csv` 多 `__rig__` 行；`results.md` 多 `rig` 列。
+* 只支持 glTF / GLB（obj、stl 等没有骨骼信息）；不支持 sparse accessor 和 morph target（形态键动画不算动画）。
+  动画只比"动了多少、动了多少骨头"，不比动作内容：参考是攻击动画、候选是走路，只要幅度和覆盖相近就得高分。
 
 ### 渲染方式
 
@@ -638,6 +686,8 @@ outputs/run_YYYYMMDD_HHMMSS/
     }
   },
   "overall_score": 88.17,
+  "shape_score": null,        // compare-models / reproduce：图片分；mesh 为两边面数、face_ratio、score、weight
+  "mesh": null,               // 纯图片的 compare 运行里两项都是 null
   "group_scores": { "mug": {"score": 96.16, "num_pairs": 3, "pairs": ["mug_front.png", "mug_side.png", "mug_top.png"]} },
   "num_pairs": 1,
   "num_valid_pairs": 1,
@@ -669,6 +719,8 @@ outputs/run_YYYYMMDD_HHMMSS/
 | `metrics.lpips.device` | `auto` | `auto` / `cuda` / `cpu` |
 | `metrics.edge.max_distance` | `20.0` | Chamfer 截断距离（像素，按 512 画布缩放） |
 | `weights.*` | 0.4/0.3/0.2/0.1 | 指标权重，总和必须为 1 |
+| `mesh_complexity.weight` | 0（shape.yaml 0.15） | 面数差异最多扣掉 shape 分数的比例；`free_log2` / `zero_log2` 定义免罚区间和归零点（见[面数](#面数mesh_complexity)） |
+| `rig.weight` | 0（shape.yaml 0.20） | 参考模型有骨骼时，骨骼 / 动画差异最多扣掉的比例；其余键见 [configs/shape.yaml](configs/shape.yaml) 注释（见[骨骼与动画](#骨骼与动画rig)） |
 | `output.report_pairs_per_page` | `6` | 报告每页配对数 |
 | `output.group_separator` | `"_"` | 按文件名前缀分组（多物体），每个物体一张报告；空字符串关闭 |
 
@@ -713,6 +765,68 @@ docker run --rm -v "$PWD/models:/app/models" -v "$PWD/outputs:/app/outputs" imgs
 API token（Sketchfab 下载、`reproduce` / `generate-model` 需要）：把 `.env.example` 复制为 `.env` 填好，compose 会自动读取；
 也可以在宿主机 `export` 后直接透传。`.env` 已被 git 和 Docker 镜像忽略。用 `docker run` 时加 `--env-file .env`。
 
+### 无头 Blender + BlenderMCP（给远程 agent 用）
+
+`docker/blender/` 是第二个镜像：Debian 里的 Blender（4.3，amd64 / arm64 都有原生包）以 `blender -b` 无头方式常驻，
+里面跑 [blender-mcp](https://github.com/ahujasid/blender-mcp) 的插件；同一容器里的 MCP 服务器改用 Streamable HTTP 传输，
+远程 agent 直接连 `http://<主机>:8000/mcp` 就能建模，导出到 `/app/models` 的 glb 会出现在宿主机的 `models/`，再用 benchmark 打分。
+
+```bash
+docker compose build blender
+docker compose up -d blender             # 端口可用 BLENDER_MCP_PORT=xxxx 改
+docker compose logs -f blender           # 看到 "socket server listening" 和 "Uvicorn running" 即就绪
+
+pip install "mcp>=1.9,<2"                   # 宿主机上装 MCP 客户端库（只为冒烟测试）
+python scripts/blender_mcp_smoke.py      # 建一个杯子 -> models/mcp_smoke.glb + outputs/mcp_smoke.png
+docker compose run --rm benchmark python -m src.cli compare-models \
+  --reference models/ref.glb --candidate models/mcp_smoke.glb --auto-orient
+```
+
+MCP 客户端配置里只需要 URL，例如 Claude Code：`claude mcp add --transport http blender http://<主机>:8000/mcp`。
+
+无头方式和桌面版插件的区别：
+
+* 原插件在 `-b` 模式下拒绝启动（它靠 `bpy.app.timers` 在主线程执行命令，无窗口时 timer 不会触发）。
+  `docker/blender/headless_server.py` 原样加载插件，自己在主线程循环里排空插件的命令队列，所以所有命令仍在主线程执行。
+* `get_viewport_screenshot` 没有视口可截，改为从自动取景的相机渲染整个场景（Workbench，失败则退到 Cycles CPU）。
+* 依赖 timer 做后续导入的集成（Hyper3D 的异步 glb 导入）不会生效；Poly Haven / Sketchfab / `execute_blender_code` 正常。
+* Blender 启动时是默认场景（一个立方体、灯和相机）。让 agent 先 `bpy.ops.wm.read_factory_settings(use_empty=True)` 清空再建模。
+
+环境变量（都在 compose 里透传，写进 `.env` 即可）：`BLENDERMCP_INTEGRATIONS`（默认 `polyhaven,sketchfab`）、
+`BLENDERMCP_HYPER3D_API_KEY` / `BLENDERMCP_POLYPIZZA_API_KEY`（Sketchfab 复用 `SKETCHFAB_API_TOKEN`）、
+`BLENDER_MCP_SAFE_MODE=1`（执行前校验脚本）、`MCP_ALLOWED_HOSTS`（限制 Host 头，例如 `myhost.example.com:*`）。
+
+安全提示：MCP 端点没有鉴权，连上的人可以在 Blender 里执行任意 Python。只在内网或反向代理加了认证之后再暴露 8000 端口。
+
+#### 在 Windows (x64) 上部署
+
+两个镜像都是 Linux 镜像，架构跟着 build 的机器走：Mac (Apple Silicon) 上 build 出来的是 arm64，拷到 Windows 上不能用；
+在 Windows 机器上重新 build 就得到 amd64 版本，Dockerfile 不用改。
+
+1. 安装 Docker Desktop for Windows，用 WSL2 后端（Settings → General → Use the WSL 2 based engine）。
+   Resources 里给 WSL 至少 4 GB 内存；两个镜像加起来约 3.5 GB 磁盘。
+2. 在 PowerShell 里：
+
+```powershell
+git clone <仓库地址> Image-similarity-benchmark
+cd Image-similarity-benchmark
+Copy-Item .env.example .env         # 按需填 key
+docker compose build                 # 同时构建 imgsim 和 imgsim-blender（第一次 10 到 20 分钟）
+docker compose up -d blender         # MCP 端点: http://<这台机器的IP>:8000/mcp
+docker compose logs -f blender
+docker compose run --rm benchmark    # 跑 benchmark 测试
+```
+
+3. 远程 agent 从别的机器访问时，Windows 防火墙要放行 8000 端口（Docker Desktop 通常会自动加规则；没有的话
+   `New-NetFirewallRule -DisplayName "blender-mcp" -Direction Inbound -LocalPort 8000 -Protocol TCP -Action Allow`）。
+
+注意事项：
+
+* `.gitattributes` 已强制 `docker/` 下的文件和 `*.sh` 用 LF 换行。如果是手动拷贝文件而不是 git clone，确认 `entrypoint.sh`
+  不是 CRLF，否则容器会报 `no such file or directory` 启动失败。
+* 镜像里跑的是 CPU 版 Blender 和 CPU 版 torch，Windows 主机的显卡不会被用到；无头建模和打分不需要显卡。
+* 只想在 Windows 上跑 benchmark 而不用 Docker 的话，见上面的安装章节（Windows 可装 CUDA 版 torch 用 GPU 算 LPIPS）。
+
 ---
 
 ## 重要说明与局限性
@@ -725,6 +839,10 @@ API token（Sketchfab 下载、`reproduce` / `generate-model` 需要）：把 `.
 * **综合分数（pair_score / overall_score）是本项目自己定义的分数，不是行业统一标准。** 它只是四个指标的加权平均，方便横向对比同一套设置下的不同 candidate。
 * **权重（0.40 / 0.30 / 0.20 / 0.10）是初始设定，需要通过人工评价数据进一步校准。** 建议收集一批人工打分的图片对，再调整权重使综合分数与人工判断相关性最高。
 * 不同视角（不同文件名）的图片不会互相比较；overall_score 只是各对分数的平均，并不代表任何跨视角的一致性。
+* **面数只是精细度的粗略代理。** 同一个物体可以用很少的面建得很准，也可以用很多面建得很糙；`mesh_score` 只惩罚数量级上的差异，
+  而且完全不看拓扑质量。参考模型本身面数偏离常规时（例如扫描件），可以调低 `mesh_complexity.weight`。
+* **骨骼分只看结构，不看动作内容和变形质量。** 关节数量和位置、权重覆盖、动画覆盖和运动幅度都对得上就是满分，
+  蒙皮权重画得糟、动作难看都测不出来；骨骼命名也没有参与比较。
 * Silhouette IoU 依赖可靠的前景 mask（alpha 通道或纯色背景）。没有可靠 mask 时该指标为 `null`，而不是伪造一个数值。
 * **三维模型对比仍然是二维图片相似度。** 六视图能反映外形轮廓和大体结构，但看不到内部结构；
   两个模型的朝向、单位必须先统一（见[三维模型对比](#三维模型对比)），否则分数没有意义。渲染没有贴图和材质，只比较几何。
