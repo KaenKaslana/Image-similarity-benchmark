@@ -105,3 +105,42 @@ def test_auto_orient_yaw_can_be_disabled(reference_file: Path) -> None:
     ref = load_mesh(reference_file)
     best = auto_orient(reference_file, ref, ("front",), size=48, yaw_step=0)
     assert best.yaw == 0.0 and best.mean_iou == pytest.approx(1.0)
+
+
+def _mug(handle_radius: float) -> trimesh.Trimesh:
+    body = trimesh.creation.annulus(r_min=0.42, r_max=0.5, height=1.0, sections=48)
+    body.apply_transform(trimesh.transformations.rotation_matrix(-np.pi / 2, [1, 0, 0]))
+    handle = trimesh.creation.torus(major_radius=handle_radius, minor_radius=0.055, major_sections=32, minor_sections=12)
+    handle.apply_translation([0.5 + handle_radius - 0.15, 0.0, 0.0])
+    return trimesh.util.concatenate([body, handle])
+
+
+def test_auto_orient_does_not_trade_size_for_rotation(tmp_path: Path) -> None:
+    """A slightly larger handle makes the whole candidate look smaller (models are
+    normalised by their largest extent). Turning the handle diagonally used to win
+    by shrinking the bounding box; with every view zoomed to the object the
+    correct, unrotated orientation wins."""
+    ref_path, cand_path = tmp_path / "ref.glb", tmp_path / "cand.glb"
+    _mug(0.27).export(ref_path)
+    _mug(0.36).export(cand_path)
+    best = auto_orient(cand_path, load_mesh(ref_path), ("front", "back", "side", "left", "top", "bottom"), size=96)
+    assert (best.up, best.front) == ("+y", "+z")
+    assert abs(best.yaw) <= 4.0
+
+
+def test_decimation_keeps_silhouettes(tmp_path: Path) -> None:
+    from src.metrics import compute_silhouette_iou
+    from src.orient import decimate_for_silhouettes
+
+    dense = trimesh.creation.icosphere(subdivisions=7)  # 327,680 faces, like an AI-generated mesh
+    bump = trimesh.creation.box(extents=[0.6, 0.3, 0.3])
+    bump.apply_translation([1.1, 0.0, 0.0])
+    path = tmp_path / "dense.glb"
+    trimesh.util.concatenate([dense, bump]).export(path)
+    mesh = load_mesh(path)
+    small = decimate_for_silhouettes(mesh, 2 * 64)  # the grid auto_orient uses for 64 px silhouettes
+    assert len(small.faces) < len(mesh.faces) / 3
+    views = ("front", "side", "top")
+    full, reduced = silhouette_masks(mesh, views, 64), silhouette_masks(small, views, 64)
+    for v in views:
+        assert compute_silhouette_iou(full[v], reduced[v]) > 0.97

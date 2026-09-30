@@ -12,6 +12,19 @@ After the best axis-aligned orientation is found, a second pass searches
 the rotation about the up axis (yaw) in fine steps, because generated models
 usually have the right up axis but face whatever direction the input image
 was taken from. Tilt about other axes and mirroring are not corrected.
+
+Every view is zoomed so that the object's projected bounding box fills the
+canvas, the same as the shape-first scoring config (``crop_mode:
+foreground_bbox``). Without this the search could "fix" a size mismatch by
+rotation: models are normalised by their largest extent, so a candidate
+whose handle sticks out a little further looks smaller in every view, and
+turning the handle diagonally shrinks the bounding box and scales it back up.
+
+Speed: silhouettes need no depth or shading. Small triangles go through the
+vectorised rasteriser, large ones are filled with OpenCV, and dense meshes
+(AI generators emit 1M+ faces) are reduced by vertex clustering on a grid of
+``2 * size`` cells before the search. The chosen rotation is applied to the
+original mesh.
 """
 
 from __future__ import annotations
@@ -21,10 +34,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
 
+import cv2
 import numpy as np
 
 from .metrics import compute_silhouette_iou
-from .render import LoadedMesh, RenderOptions, all_orientations, load_mesh, render_view, reorient, rotate, yaw_matrix
+from .render import LoadedMesh, all_orientations, load_mesh, rasterize, reorient, rotate, view_basis, yaw_matrix
 
 logger = logging.getLogger(__name__)
 
@@ -62,10 +76,59 @@ def _mean_iou(ref_masks: dict[str, np.ndarray], masks: dict[str, np.ndarray]) ->
     return float(np.mean(list(ious.values()))), ious
 
 
+_FIT_MARGIN = 0.02  # empty border around the zoomed object, as a fraction of the canvas
+_BIG_TRIANGLE = 4.0  # triangles wider than this many pixels are filled with OpenCV
+_CV_SHIFT = 4  # fixed-point bits for sub-pixel OpenCV drawing
+
+
+def fit_silhouette(mesh: LoadedMesh, view: str, size: int) -> np.ndarray:
+    """Boolean silhouette of one view, zoomed so the projected bounding box fills the canvas."""
+    right, up, _ = view_basis(view)
+    u = mesh.vertices @ right
+    w = -(mesh.vertices @ up)
+    u_lo, u_hi, w_lo, w_hi = u.min(), u.max(), w.min(), w.max()
+    scale = size * (1.0 - 2.0 * _FIT_MARGIN) / max(u_hi - u_lo, w_hi - w_lo, 1e-12)
+    xs = size / 2.0 + (u - (u_lo + u_hi) / 2.0) * scale
+    ys = size / 2.0 + (w - (w_lo + w_hi) / 2.0) * scale
+    tx, ty = xs[mesh.faces], ys[mesh.faces]
+    big = np.maximum(tx.max(1) - tx.min(1), ty.max(1) - ty.min(1)) > _BIG_TRIANGLE
+    small = ~big
+    n_small = int(small.sum())
+    zbuf, _ = rasterize(np.stack([tx[small], ty[small]], axis=2), np.zeros((n_small, 3)),
+                        np.zeros(n_small, np.float32), size)
+    img = np.isfinite(zbuf).astype(np.uint8)
+    if big.any():
+        # OpenCV puts pixel centres on integer coordinates, the rasteriser at i + 0.5.
+        # fillPoly with many polygons uses even-odd filling (overlaps become holes),
+        # so the (few) large triangles are filled one by one.
+        pts = np.rint((np.stack([tx[big], ty[big]], axis=2) - 0.5) * (1 << _CV_SHIFT)).astype(np.int32)
+        for tri in pts:
+            cv2.fillConvexPoly(img, tri, 1, lineType=cv2.LINE_8, shift=_CV_SHIFT)
+    return img.astype(bool)
+
+
 def silhouette_masks(mesh: LoadedMesh, views: Sequence[str], size: int) -> dict[str, np.ndarray]:
-    """Boolean foreground masks of ``views`` rendered at ``size`` pixels."""
-    opts = RenderOptions(size=size, views=tuple(views), style="silhouette", supersample=1)
-    return {v: render_view(mesh, v, opts)[..., 3] > 0 for v in views}
+    """Boolean silhouettes of ``views`` at ``size`` pixels, each zoomed to the object."""
+    return {v: fit_silhouette(mesh, v, size) for v in views}
+
+
+def decimate_for_silhouettes(mesh: LoadedMesh, cells: int, max_faces: int = 60000) -> LoadedMesh:
+    """Vertex clustering: snap vertices to ``cells`` grid cells per unit, merge each
+    cell and drop collapsed or duplicate faces. Only for silhouette search; meshes
+    with at most ``max_faces`` faces are returned unchanged."""
+    if len(mesh.faces) <= max_faces:
+        return mesh
+    grid = np.floor((mesh.vertices + 0.5) * cells).astype(np.int64)
+    keys, inverse = np.unique(grid, axis=0, return_inverse=True)
+    inverse = inverse.ravel()
+    sums = np.zeros((len(keys), 3))
+    np.add.at(sums, inverse, mesh.vertices)
+    vertices = sums / np.bincount(inverse, minlength=len(keys))[:, None]
+    faces = inverse[mesh.faces]
+    ok = (faces[:, 0] != faces[:, 1]) & (faces[:, 1] != faces[:, 2]) & (faces[:, 0] != faces[:, 2])
+    faces = np.unique(np.sort(faces[ok], axis=1), axis=0)
+    logger.debug("decimated %d -> %d faces for orientation search", len(mesh.faces), len(faces))
+    return LoadedMesh(vertices, faces, np.zeros((len(faces), 3)), mesh.source, mesh.original_extents, dict(mesh.meta))
 
 
 def auto_orient(
@@ -89,7 +152,8 @@ def auto_orient(
             loaded mesh whose frame is treated as the starting point.
         reference: reference mesh in its final frame.
         views: view names used for the comparison (e.g. front/side/top).
-        size: silhouette resolution; 128 px is plenty for choosing a rotation.
+        size: silhouette resolution (each view zoomed to the object); 128 px is
+            plenty for choosing a rotation.
         orientations: subset of ``(up, front)`` pairs to try (default: all 24).
 
     Returns:
@@ -100,7 +164,8 @@ def auto_orient(
     if not views:
         raise ValueError("auto_orient needs at least one view")
     base = candidate if isinstance(candidate, LoadedMesh) else load_mesh(candidate)
-    ref_masks = silhouette_masks(reference, views, size)
+    base = decimate_for_silhouettes(base, 2 * size)
+    ref_masks = silhouette_masks(decimate_for_silhouettes(reference, 2 * size), views, size)
 
     ranking: list[dict[str, Any]] = []
     for up, front in orientations or all_orientations():
