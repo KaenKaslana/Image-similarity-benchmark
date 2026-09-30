@@ -1,0 +1,58 @@
+{
+  "name": "mug-with-assets",
+  "description": "允许用 Blender MCP 的资产库（Sketchfab、Poly Haven 搜索下载现成模型），对比'自己建模'和'找现成的'哪个分高。AI 生成类工具（Tripo、Hyper3D、Hunyuan3D）仍然屏蔽：要额外点数，容器里也没配 key。",
+  "runtime": {
+    "type": "mcp",
+    "mcp": {
+      "transport": "streamable_http",
+      "url": "${MCP_URL:-http://localhost:8000/mcp}",
+      "workspace_path": "/app/workspaces/example",
+      "timeout_seconds": 300,
+      "exclude_tools": [
+        "*hyper3d*",
+        "*hunyuan*",
+        "*tripo*",
+        "*rodin*",
+        "import_generated_asset*",
+        "record_trajectory_feedback"
+      ]
+    },
+    "tools": [
+      "list_files",
+      "read_image",
+      "render_views"
+    ]
+  },
+  "llm": {
+    "api_format": "${LLM_API_FORMAT:-openai}",
+    "base_url": "${LLM_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}",
+    "api_key": "${LLM_API_KEY}",
+    "model": "${LLM_MODEL:-qwen3-vl-plus}",
+    "max_tokens": 16000,
+    "timeout_seconds": 300
+  },
+  "workspace": {
+    "root": "../../workspaces/example",
+    "output_dir": "runs"
+  },
+  "limits": {
+    "max_turns": 40,
+    "timeout_seconds": 1800,
+    "tool_timeout_seconds": 300
+  },
+  "evaluation": {
+    "enabled": true,
+    "auto_orient": true,
+    "feedback_rounds": 1
+  },
+  "tasks": [
+    {
+      "id": "mug_assets",
+      "prompt": "做一个马克杯的三维模型：圆柱形杯身，杯口敞开、杯壁有一定厚度，平底，侧面有一个 C 形把手。形状和比例以参考图片为准。可以先在 Sketchfab / Poly Haven 资产库里搜索合适的现成模型导入后再修改，也可以自己建模。",
+      "reference_images": [
+        "refs/mug/*.png"
+      ],
+      "reference_model": "answers/mug.glb"
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "name": "mug-claude-code",
+  "description": "Any other agent CLI: here Claude Code in print mode. The runner fills in the prompt and paths, records stdout (stream-json events) and scores the model left at {output_model}.",
+
+  "runtime": {
+    "type": "command",
+    "command": [
+      "claude", "-p", "{prompt}",
+      "--output-format", "stream-json", "--verbose",
+      "--allowedTools", "Bash,Read,Write,Edit,Glob,Grep"
+    ],
+    "env": {}
+  },
+
+  "llm": {
+    "api_format": "anthropic",
+    "base_url": "${ANTHROPIC_BASE_URL:-https://api.anthropic.com}",
+    "api_key": "${ANTHROPIC_API_KEY}",
+    "model": "claude-opus-5"
+  },
+
+  "workspace": {
+    "root": "../../workspaces/example",
+    "output_dir": "runs"
+  },
+
+  "limits": {
+    "timeout_seconds": 1800
+  },
+
+  "tasks": [
+    {
+      "id": "mug",
+      "prompt": "做一个马克杯的三维模型：圆柱形杯身，杯口敞开、杯壁有一定厚度，平底，侧面有一个 C 形把手。形状和比例以参考图片为准。可以用 Python 的 trimesh 建模。",
+      "reference_images": ["refs/mug/*.png"],
+      "reference_model": "answers/mug.glb"
+    }
+  ]
+}

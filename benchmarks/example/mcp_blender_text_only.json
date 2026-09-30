@@ -1,0 +1,66 @@
+{
+  "name": "text-only",
+  "description": "只给文字、不给参考图片：看模型能不能按尺寸描述建模。不做反馈（反馈里的报告图会泄露参考模型）。 只留 render_views 一个辅助工具，没有 list_files / read_image，看不到 refs/ 里的图片。",
+  "runtime": {
+    "type": "mcp",
+    "mcp": {
+      "transport": "streamable_http",
+      "url": "${MCP_URL:-http://localhost:8000/mcp}",
+      "workspace_path": "/app/workspaces/example",
+      "timeout_seconds": 300,
+      "exclude_tools": [
+        "*sketchfab*",
+        "*polyhaven*",
+        "*polypizza*",
+        "*hyper3d*",
+        "*hunyuan*",
+        "*tripo*",
+        "*rodin*",
+        "import_generated_asset*",
+        "record_trajectory_feedback"
+      ]
+    },
+    "tools": [
+      "render_views"
+    ]
+  },
+  "llm": {
+    "api_format": "${LLM_API_FORMAT:-openai}",
+    "base_url": "${LLM_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}",
+    "api_key": "${LLM_API_KEY}",
+    "model": "${LLM_MODEL:-qwen3-vl-plus}",
+    "max_tokens": 16000,
+    "timeout_seconds": 300
+  },
+  "workspace": {
+    "root": "../../workspaces/example",
+    "output_dir": "runs"
+  },
+  "limits": {
+    "max_turns": 40,
+    "timeout_seconds": 1800,
+    "tool_timeout_seconds": 300
+  },
+  "evaluation": {
+    "enabled": true,
+    "auto_orient": true,
+    "feedback_rounds": 0
+  },
+  "tasks": [
+    {
+      "id": "mug_text",
+      "prompt": "做一个马克杯（没有参考图片，只按文字描述建模）：杯身是竖直的空心圆柱，外径 1.0、高 1.0，杯壁厚约 0.08，平底，杯口敞开；右侧（+X 方向）有一个竖直的 C 形圆环把手，圆环中心线半径约 0.27、管子直径约 0.11，把手最外侧离杯子中心约 0.95。",
+      "reference_model": "answers/mug.glb"
+    },
+    {
+      "id": "table_text",
+      "prompt": "做一张长方形餐桌（没有参考图片，只按文字描述建模）：桌面长 1.2（左右，X 方向）、宽 0.7（前后，Z 方向）、厚 0.06，桌面上表面离地 0.75；四条方腿截面 0.06×0.06，从地面一直到桌面底下，腿的中心离桌面中心左右各 0.53、前后各 0.28。",
+      "reference_model": "answers/table.glb"
+    },
+    {
+      "id": "chair_text",
+      "prompt": "做一把椅子（没有参考图片，只按文字描述建模）：方形座面 0.46×0.46、厚 0.05，座面上表面离地 0.475；四条方腿截面 0.04×0.04，腿中心离座面中心前后左右各 0.2；椅子后侧（-Z）的两根后腿向上延伸成立柱，一直到离地 0.97；两根立柱之间靠上部有一块宽 0.44、高 0.18、厚 0.03 的靠背板（中心离地约 0.86）。椅子正面朝向 +Z。",
+      "reference_model": "answers/chair.glb"
+    }
+  ]
+}

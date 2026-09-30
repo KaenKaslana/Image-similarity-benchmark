@@ -17,5 +17,10 @@ lpips>=0.1.4
 # 3D model loading for render-views / compare-models (glb, gltf, obj, stl, ply ...)
 trimesh>=4.0
 
+# Agent benchmark runner (python -m src.agentbench): MCP client + Claude SDK
+mcp>=1.9,<2
+anthropic>=0.40
+certifi
+
 # Testing
 pytest>=7.4

@@ -33,3 +33,6 @@ data/candidate/*
 
 # Blender MCP smoke-test screenshot (scripts/blender_mcp_smoke.py)
 outputs/mcp_smoke.png
+
+# Agent benchmark runs (python -m src.agentbench)
+workspaces/*/runs/

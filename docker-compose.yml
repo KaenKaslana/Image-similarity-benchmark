@@ -7,6 +7,10 @@
 #     MCP endpoint for remote agents: http://<this host>:8000/mcp
 #     glb files exported to /app/models inside Blender land in ./models on the host,
 #     ready for `compare-models` above.
+#
+# docker compose run --rm benchmark python -m src.agentbench run benchmarks/example/mcp_blender.json
+#     config-driven agent benchmark: the LLM agent works in ./workspaces/<name>
+#     (mounted in both containers at /app/workspaces) through the Blender MCP server.
 services:
   benchmark:
     image: imgsim
@@ -20,10 +24,19 @@ services:
       - SKETCHFAB_API_TOKEN
       - TRIPO_API_KEY
       - MESHY_API_KEY
+      # agent benchmark (src/agentbench): model API and the MCP server inside compose
+      - LLM_BASE_URL
+      - LLM_API_KEY
+      - LLM_MODEL
+      - ANTHROPIC_API_KEY
+      - ANTHROPIC_BASE_URL
+      - MCP_URL=${MCP_URL:-http://blender:8000/mcp}
     volumes:
       - ./data:/app/data
       - ./models:/app/models
       - ./outputs:/app/outputs
+      - ./workspaces:/app/workspaces
+      - ./benchmarks:/app/benchmarks
 
   blender:
     image: imgsim-blender
@@ -48,4 +61,6 @@ services:
     volumes:
       - ./models:/app/models
       - ./outputs:/app/outputs
+      # agent workspaces only (benchmarks/, which holds the scoring answers, is not mounted here)
+      - ./workspaces:/app/workspaces
     restart: unless-stopped

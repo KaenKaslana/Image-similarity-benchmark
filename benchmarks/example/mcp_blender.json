@@ -1,0 +1,52 @@
+{
+  "name": "mug-blender-mcp",
+  "description": "Agent models a mug in headless Blender through BlenderMCP (docker compose up -d blender).",
+
+  "runtime": {
+    "type": "mcp",
+    "mcp": {
+      "transport": "streamable_http",
+      "url": "${MCP_URL:-http://localhost:8000/mcp}",
+      "workspace_path": "/app/workspaces/example",
+      "timeout_seconds": 300,
+      "exclude_tools": ["*sketchfab*", "*polyhaven*", "*polypizza*", "*hyper3d*", "*hunyuan*", "*tripo*",
+                        "*rodin*", "import_generated_asset*", "record_trajectory_feedback"]
+    },
+    "tools": ["list_files", "read_image", "render_views"]
+  },
+
+  "llm": {
+    "api_format": "${LLM_API_FORMAT:-openai}",
+    "base_url": "${LLM_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}",
+    "api_key": "${LLM_API_KEY}",
+    "model": "${LLM_MODEL:-qwen3-vl-plus}",
+    "max_tokens": 16000,
+    "timeout_seconds": 300
+  },
+
+  "workspace": {
+    "root": "../../workspaces/example",
+    "output_dir": "runs"
+  },
+
+  "limits": {
+    "max_turns": 40,
+    "timeout_seconds": 1800,
+    "tool_timeout_seconds": 300
+  },
+
+  "evaluation": {
+    "enabled": true,
+    "auto_orient": true,
+    "feedback_rounds": 1
+  },
+
+  "tasks": [
+    {
+      "id": "mug",
+      "prompt": "做一个马克杯的三维模型：圆柱形杯身，杯口敞开、杯壁有一定厚度，平底，侧面有一个 C 形把手。形状和比例以参考图片为准。",
+      "reference_images": ["refs/mug/*.png"],
+      "reference_model": "answers/mug.glb"
+    }
+  ]
+}

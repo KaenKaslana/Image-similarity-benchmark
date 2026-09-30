@@ -14,6 +14,7 @@ dist
 models/*
 !models/.gitkeep
 outputs/run_*
+workspaces/*/runs
 data/reference/*
 data/candidate/*
 !data/reference/.gitkeep
