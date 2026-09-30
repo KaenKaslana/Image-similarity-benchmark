@@ -447,54 +447,76 @@ def run_model_comparison(
     extra_meta: dict | None = None,
     cand_yaw: float = 0.0,
 ) -> BenchmarkResult:
-    """Render both models (orienting the candidate if asked) and score them."""
+    """Render both models (orienting the candidate if asked) and score them.
+
+    With ``auto``, the silhouette search (:func:`auto_orient`) proposes the
+    orientation; when it picked a yaw other than 0, the axis-aligned
+    orientation is scored as well and the higher overall score wins.
+    Silhouettes alone cannot tell "handle too thick, unrotated" from "correct
+    handle, turned a bit", but the full score (edges, weakest view) can.
+    """
     ref_mesh = load_mesh(ref_path, opts.up, opts.front)
     orient_info = None
     if auto:
         base = load_mesh(cand_path)
         best = auto_orient(base, ref_mesh, opts.views)
-        cand_mesh = apply_orientation(base, best.up, best.front, best.yaw)
         orient_info = best.to_dict()
-        logger.info("Candidate orientation chosen automatically: up=%s front=%s yaw=%.1f", best.up, best.front, best.yaw)
+        candidates = [(best.up, best.front, float(best.yaw))]
+        if abs(best.yaw) > 1e-6:
+            candidates.append((best.up, best.front, 0.0))
+        logger.info("Candidate orientation from silhouettes: up=%s front=%s yaw=%.1f", best.up, best.front, best.yaw)
     else:
-        cand_mesh = apply_orientation(load_mesh(cand_path), cand_up or opts.up, cand_front or opts.front, cand_yaw)
+        base = load_mesh(cand_path)
+        candidates = [(cand_up or opts.up, cand_front or opts.front, float(cand_yaw))]
 
-    with tempfile.TemporaryDirectory(prefix="imgsim_render_") as tmp:
-        render_root = Path(tmp) if run_dir is None else run_dir / "renders"
-        ref_dir, cand_dir = render_root / "reference", render_root / "candidate"
-        logger.info("Rendering reference model %s", ref_path)
-        render_views(ref_mesh, ref_dir, opts)
-        logger.info("Rendering candidate model %s", cand_path)
-        render_views(cand_mesh, cand_dir, opts)
-        mesh_info = mesh_complexity(
-            MeshStats(faces=len(ref_mesh.faces), vertices=len(ref_mesh.vertices)),
-            MeshStats(faces=len(cand_mesh.faces), vertices=len(cand_mesh.vertices)),
-            cfg.mesh_complexity,
-        )
-        # Rig / animation: compare the skeletons in the same orientation as the renders.
-        if orient_info:
-            c_up, c_front, c_yaw = orient_info["up"], orient_info["front"], float(orient_info["yaw"])
-        else:
-            c_up, c_front, c_yaw = cand_up or opts.up, cand_front or opts.front, float(cand_yaw)
-        rig_info = rig_comparison(
-            analyse_rig(ref_path, cfg.rig.motion_samples),
-            analyse_rig(cand_path, cfg.rig.motion_samples),
-            cfg.rig,
-            ref_rotation=canonical_rotation(opts.up, opts.front),
-            cand_rotation=yaw_matrix(c_yaw) @ canonical_rotation(c_up, c_front),
-        )
-        result = BenchmarkRunner(cfg).run(
-            ref_dir, cand_dir, None, run_dir=run_dir, mesh_complexity=mesh_info, rig=rig_info
-        )
+    runner = BenchmarkRunner(cfg)
+    ref_rig = analyse_rig(ref_path, cfg.rig.motion_samples)
+    cand_rig = analyse_rig(cand_path, cfg.rig.motion_samples)
+
+    def score(up: str, front: str, yaw: float, out_dir: Path | None) -> BenchmarkResult:
+        cand_mesh = apply_orientation(base, up, front, yaw)
+        with tempfile.TemporaryDirectory(prefix="imgsim_render_") as tmp:
+            render_root = Path(tmp) if out_dir is None else out_dir / "renders"
+            ref_dir, cand_dir = render_root / "reference", render_root / "candidate"
+            logger.info("Rendering reference model %s", ref_path)
+            render_views(ref_mesh, ref_dir, opts)
+            logger.info("Rendering candidate model %s (up=%s front=%s yaw=%.1f)", cand_path, up, front, yaw)
+            render_views(cand_mesh, cand_dir, opts)
+            mesh_info = mesh_complexity(
+                MeshStats(faces=len(ref_mesh.faces), vertices=len(ref_mesh.vertices)),
+                MeshStats(faces=len(cand_mesh.faces), vertices=len(cand_mesh.vertices)),
+                cfg.mesh_complexity,
+            )
+            # Rig / animation: compare the skeletons in the same orientation as the renders.
+            rig_info = rig_comparison(
+                ref_rig, cand_rig, cfg.rig,
+                ref_rotation=canonical_rotation(opts.up, opts.front),
+                cand_rotation=yaw_matrix(yaw) @ canonical_rotation(up, front),
+            )
+            return runner.run(ref_dir, cand_dir, None, run_dir=out_dir, mesh_complexity=mesh_info, rig=rig_info)
+
+    results = [score(*candidates[0], run_dir)]
+    for c in candidates[1:]:
+        results.append(score(*c, None))
+    scores = [r.overall_score if r.overall_score is not None else -1.0 for r in results]
+    winner = max(range(len(results)), key=scores.__getitem__)
+    if winner != 0:
+        logger.info("Axis-aligned orientation (yaw 0) scores %.2f vs %.2f with yaw %.1f; keeping yaw 0",
+                    scores[winner], scores[0], candidates[0][2])
+        result = score(*candidates[winner], run_dir) if run_dir is not None else results[winner]
+    else:
+        result = results[0]
+    chosen = candidates[winner]
+    if orient_info is not None:
+        orient_info["yaw"] = chosen[2]
+        orient_info["scored"] = [{"up": c[0], "front": c[1], "yaw": c[2], "overall_score": sc}
+                                 for c, sc in zip(candidates, scores)]
 
     if run_dir is not None:
-        if orient_info:
-            cand_axes = {"up": orient_info["up"], "front": orient_info["front"], "yaw": orient_info["yaw"]}
-        else:
-            cand_axes = {"up": cand_up or opts.up, "front": cand_front or opts.front, "yaw": cand_yaw}
         models_meta = {
             "reference": {"model": str(ref_path), "up": opts.up, "front": opts.front},
-            "candidate": {"model": str(cand_path), **cand_axes, "auto_orient": orient_info},
+            "candidate": {"model": str(cand_path), "up": chosen[0], "front": chosen[1], "yaw": chosen[2],
+                          "auto_orient": orient_info},
             "render": opts.to_dict(),
             **(extra_meta or {}),
         }

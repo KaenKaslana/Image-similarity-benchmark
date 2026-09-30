@@ -197,20 +197,34 @@ def measure_pair(pair: dict) -> dict:
         opts = RenderOptions(size=512, views=VIEWS)
         ref_mesh = load_mesh(ref_path)
         base = load_mesh(cand_path)
-        best = auto_orient(base, ref_mesh, VIEWS)
-        cand_mesh = apply_orientation(base, best.up, best.front, best.yaw)
-        views = {}
         for v in VIEWS:
-            for side, mesh in (("ref", ref_mesh), ("cand", cand_mesh)):
-                Image.fromarray(render_view(mesh, v, opts), mode="RGBA").save(tmp / f"{side}_{v}.png")
-            r = _RUNNER.compare_pair(tmp / f"ref_{v}.png", tmp / f"cand_{v}.png", name=v)
-            views[v] = {
-                "silhouette": r.silhouette_score,
-                "edge": r.edge_score,
-                "lpips": r.lpips_score,
-                "ssim": r.ssim_score,
-            }
-    return {**pair, "views": views, "orient": {"up": best.up, "front": best.front, "yaw": best.yaw}}
+            Image.fromarray(render_view(ref_mesh, v, opts), mode="RGBA").save(tmp / f"ref_{v}.png")
+        best = auto_orient(base, ref_mesh, VIEWS)
+        # Same rule as compare-models: the silhouette search proposes, and when it
+        # picked a yaw, the axis-aligned orientation is measured too; the one with
+        # the higher overall score under the current shape.yaml is kept.
+        cfg = _RUNNER.config
+        floors = {m: cfg.score_floors[m] for m in METRICS}
+        weights = {m: cfg.weights[m] for m in METRICS}
+        candidates = [best.yaw] + ([0.0] if abs(best.yaw) > 1e-6 else [])
+        measured = []
+        for yaw in candidates:
+            cand_mesh = apply_orientation(base, best.up, best.front, yaw)
+            views = {}
+            for v in VIEWS:
+                Image.fromarray(render_view(cand_mesh, v, opts), mode="RGBA").save(tmp / f"cand_{v}.png")
+                r = _RUNNER.compare_pair(tmp / f"ref_{v}.png", tmp / f"cand_{v}.png", name=v)
+                views[v] = {
+                    "silhouette": r.silhouette_score,
+                    "edge": r.edge_score,
+                    "lpips": r.lpips_score,
+                    "ssim": r.ssim_score,
+                }
+            rec = {"views": views}
+            measured.append((overall(rec, floors, cfg.score_gamma, weights, cfg.view_power), yaw, views))
+        score, yaw, views = max(measured, key=lambda m: m[0])
+    return {**pair, "views": views, "orient": {"up": best.up, "front": best.front, "yaw": yaw,
+                                               "silhouette_yaw": best.yaw}}
 
 
 # ---------------------------------------------------------------------------

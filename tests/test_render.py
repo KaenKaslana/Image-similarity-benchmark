@@ -282,3 +282,29 @@ def test_cli_compare_models_bad_model_exit_code(tmp_path: Path, capsys) -> None:
                  "--no-save", "--log-level", "WARNING"])
     assert code == 4
     assert "not found" in capsys.readouterr().err
+
+
+def test_auto_orient_final_choice_by_score(mesh_file: Path, tmp_path: Path, monkeypatch) -> None:
+    """The silhouette search only proposes; when it suggests a yaw, the axis-aligned
+    orientation is scored too and the better overall score wins."""
+    from src import cli
+    from src.config import load_config
+    from src.orient import OrientResult
+
+    def wrong_yaw(base, reference, views, **kw):
+        return OrientResult("+y", "+z", 0.9, yaw=25.0, axis_aligned_iou=0.85)
+
+    monkeypatch.setattr(cli, "auto_orient", wrong_yaw)
+    cfg = load_config(cli.SHAPE_CONFIG)
+    cfg.preprocessing.canvas_size = 64
+    cfg.metrics.lpips.device = "cpu"
+    cfg.validate()
+    opts = RenderOptions(size=64, views=("front", "side", "top"))
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    result = cli.run_model_comparison(cfg, opts, mesh_file, mesh_file, run_dir, True, None, None)
+    assert result.overall_score == pytest.approx(100.0, abs=0.5)  # identical model, yaw 0 kept
+    meta = json.loads((run_dir / "models.json").read_text())
+    assert meta["candidate"]["yaw"] == 0.0
+    scored = meta["candidate"]["auto_orient"]["scored"]
+    assert [s["yaw"] for s in scored] == [25.0, 0.0] and scored[1]["overall_score"] > scored[0]["overall_score"]
