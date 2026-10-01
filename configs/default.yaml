@@ -113,10 +113,15 @@ weights:
 # runs). overall = shape_score * (1 - weight * (1 - mesh_score / 100)), where
 # mesh_score is 100 while |log2(candidate_faces / reference_faces)| <= free_log2
 # and falls linearly to 0 at zero_log2. weight 0 = report the counts only.
+# mode fewer_is_better (used by configs/shape.yaml) penalises only more faces and
+# rewards fewer with up to bonus_weight of the shape score; symmetric penalises both.
 mesh_complexity:
+  mode: symmetric
   weight: 0.0
   free_log2: 1.0
   zero_log2: 5.0
+  bonus_weight: 0.0
+  bonus_log2: 2.0
 
 # Rig / animation term used by compare-models / reproduce when the reference
 # model is rigged (glTF skins): overall = shape_score * (1 - weight * (1 - rig_score / 100)).

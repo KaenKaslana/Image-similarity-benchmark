@@ -281,19 +281,27 @@ python -m src.cli fetch-sketchfab https://sketchfab.com/3d-models/coffee-mug-<ui
 会额外比较两个网格的面数（trimesh 加载后的三角面数，多部件已合并；参考模型如果是四边面，同样按三角化后的数量算）：
 
 ```text
-shape_score                                                64.65        # 纯图片分，和以前的 overall_score 含义相同
-mesh_score               faces 1,032 vs 1,532 (x1.484)    100.00   weight 0.15
-overall_score                                              64.65
+shape_score                                                92.86        # 纯图片分，和以前的 overall_score 含义相同
+mesh_score               faces 2,304 vs 7,164 (x3.109)     84.08   weight 0.15
+mesh_bonus               fewer faces: +0.0 % of 5 %
+overall_score                                              90.64
 ```
 
-* `mesh_score`（0–100）由 `候选面数 / 参考面数` 的 log2 值决定：相差不到 2 倍得 100，之后线性下降，相差 32 倍（任一方向）得 0。
-  面数太少（欠建模）和太多（AI 扫描式稠密网格）受同样的惩罚。
-* `overall_score = shape_score × (1 − weight × (1 − mesh_score / 100))`：面数匹配时分数不变，相差 32 倍最多扣 `weight` 的比例
-  （`configs/shape.yaml` 默认 0.15，即最多扣 15%）。用乘法而不是加权平均，是为了不破坏已校准的 shape 分数尺度（相同 100、无关约 3）。
-* `metrics.json` 多出 `shape_score` 和 `mesh`（两边的面数、顶点数、`face_ratio`、`score`、`weight`），
+面数越少越好（`configs/shape.yaml` 的 `mode: fewer_is_better`）：形状分已经说明像不像，同样像的模型里更省面的赢。
+
+* 面数**多于**参考：`mesh_score`（0–100）由 `log2(候选面数 / 参考面数)` 决定，不到 2 倍得 100，之后线性下降，32 倍得 0；
+  `overall = shape_score × (1 − weight × (1 − mesh_score / 100))`，最多扣 `weight`（默认 0.15，即 15%）。
+* 面数**少于**参考：不扣分，反而有效率奖励 `bonus`（0–1，少到参考的四分之一时拉满，`bonus_log2: 2`），
+  `overall` 再乘 `(1 + bonus_weight × bonus)`，最多加 `bonus_weight`（默认 0.05，即 5%），总分封顶 100。
+  奖励也是乘法，所以形状很差的模型省面也救不回来（3 分变 3.15 分）。
+* 例子：gpt-6 做的马克杯 2,298 面对参考 2,304 面，不加不减；文字版马克杯 7,164 面（3.1 倍），扣 2.2 分；
+  一把 72 面的椅子对 96 面的参考，加 1%。
+* `mode: symmetric` 是旧行为：面数太少（欠建模）和太多（AI 扫描式稠密网格）受同样的惩罚，没有奖励。
+* 用乘法而不是加权平均，是为了不破坏已校准的 shape 分数尺度（相同 100、无关约 3）。
+* `metrics.json` 多出 `shape_score` 和 `mesh`（两边的面数、顶点数、`face_ratio`、`mode`、`score`、`weight`、`bonus`、`bonus_weight`），
   `metrics.csv` 多出 `__shape__` 和 `__mesh__` 两行，`report.png` 标题多一行面数信息，`outputs/results.md` 多 `shape` / `faces` / `mesh` 三列。
-* `--mesh-weight 0` 只报告面数不计分（老的 `overall_score` 行为）；也可以在 YAML 里改 `mesh_complexity.weight` / `free_log2` / `zero_log2`。
-  纯图片的 `compare` 命令不受影响。
+* `--mesh-weight 0` 只报告面数不计分（老的 `overall_score` 行为）；也可以在 YAML 里改 `mesh_complexity.mode` / `weight` /
+  `free_log2` / `zero_log2` / `bonus_weight` / `bonus_log2`。纯图片的 `compare` 命令不受影响。
 
 ### 骨骼与动画（rig）
 
@@ -881,7 +889,7 @@ outputs/run_YYYYMMDD_HHMMSS/
 | `metrics.lpips.device` | `auto` | `auto` / `cuda` / `cpu` |
 | `metrics.edge.max_distance` | `20.0` | Chamfer 截断距离（像素，按 512 画布缩放） |
 | `weights.*` | 0.4/0.3/0.2/0.1 | 指标权重，总和必须为 1 |
-| `mesh_complexity.weight` | 0（shape.yaml 0.15） | 面数差异最多扣掉 shape 分数的比例；`free_log2` / `zero_log2` 定义免罚区间和归零点（见[面数](#面数mesh_complexity)） |
+| `mesh_complexity.weight` | 0（shape.yaml 0.15） | 面数多于参考时最多扣掉 shape 分数的比例；`free_log2` / `zero_log2` 定义免罚区间和归零点；`mode: fewer_is_better`（shape.yaml）下面数少于参考有最多 `bonus_weight`（0.05）的奖励（见[面数](#面数mesh_complexity)） |
 | `rig.weight` | 0（shape.yaml 0.20） | 参考模型有骨骼时，骨骼 / 动画差异最多扣掉的比例；其余键见 [configs/shape.yaml](configs/shape.yaml) 注释（见[骨骼与动画](#骨骼与动画rig)） |
 | `output.report_pairs_per_page` | `6` | 报告每页配对数 |
 | `output.group_separator` | `"_"` | 按文件名前缀分组（多物体），每个物体一张报告；空字符串关闭 |

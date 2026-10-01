@@ -61,6 +61,8 @@ def _mesh_caption(result: "BenchmarkResult") -> str:
             f" | faces: reference {m['reference']['faces']:,}, candidate {m['candidate']['faces']:,}"
             f" (x{_fmt(m['face_ratio'], 3)}) -> mesh score {_fmt(m['score'])} at weight {m['weight']:.2f}"
         )
+        if m.get("bonus_weight"):
+            text += f", efficiency bonus {100 * m['bonus_weight'] * m['bonus']:+.1f} %"
     if result.rig is not None:
         r = result.rig
         if r.get("applicable"):
@@ -403,6 +405,9 @@ def format_summary_table(result: "BenchmarkResult") -> str:
         lines.append(f"{'shape_score':<24} {'':>7} {'':>7} {'':>7} {'':>7} {_fmt(result.shape_score):>7}")
         faces = f"faces {m['reference']['faces']:,} vs {m['candidate']['faces']:,} (x{_fmt(m['face_ratio'], 3)})"
         lines.append(f"{'mesh_score':<24} {faces:<31} {_fmt(m['score']):>7}   weight {m['weight']:.2f}")
+        if m.get("bonus_weight"):
+            bonus = f"fewer faces: +{100 * m['bonus_weight'] * m['bonus']:.1f} % of {100 * m['bonus_weight']:.0f} %"
+            lines.append(f"{'mesh_bonus':<24} {bonus:<31}")
     if result.rig is not None:
         r = result.rig
         if result.mesh is None:

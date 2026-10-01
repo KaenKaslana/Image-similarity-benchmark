@@ -53,3 +53,41 @@ def test_mesh_complexity_config_validation() -> None:
         config_from_dict({"mesh_complexity": {"free_log2": 3, "zero_log2": 2}})
     with pytest.raises(ConfigError):
         config_from_dict({"mesh_complexity": {"weight": "lots"}})
+
+
+@pytest.mark.parametrize(
+    "ratio, score, bonus",
+    [
+        (1.0, 100.0, 0.0),  # same face count: nothing happens
+        (2.0, 100.0, 0.0),  # up to 2x more: free
+        (8.0, 50.0, 0.0),  # 8x more: halfway to zero
+        (32.0, 0.0, 0.0),
+        (0.5, 100.0, 0.5),  # half the faces: no penalty, half the bonus
+        (0.25, 100.0, 1.0),  # a quarter: full bonus
+        (1 / 64, 100.0, 1.0),  # fewer still: capped
+    ],
+)
+def test_fewer_is_better_mode(ratio: float, score: float, bonus: float) -> None:
+    from src.complexity import efficiency_bonus
+
+    assert complexity_score(ratio, 1.0, 5.0, "fewer_is_better") == pytest.approx(score)
+    assert efficiency_bonus(ratio, 2.0) == pytest.approx(bonus)
+
+
+def test_fewer_is_better_blend_is_capped() -> None:
+    cfg = MeshComplexityConfig(mode="fewer_is_better", weight=0.15, bonus_weight=0.05, bonus_log2=2.0)
+    cfg.validate()
+    lean = mesh_complexity(MeshStats(2304, 1200), MeshStats(576, 300), cfg)  # a quarter of the faces
+    assert lean["mode"] == "fewer_is_better" and lean["score"] == 100.0 and lean["bonus"] == pytest.approx(1.0)
+    assert blend_with_shape_score(90.0, lean) == pytest.approx(94.5)  # +5 %
+    assert blend_with_shape_score(98.0, lean) == 100.0  # capped
+    assert blend_with_shape_score(3.0, lean) == pytest.approx(3.15)  # a poor shape stays poor
+    fat = mesh_complexity(MeshStats(2304, 1200), MeshStats(7164, 3600), cfg)  # 3.1x more faces
+    assert fat["bonus"] == 0.0 and 80 < fat["score"] < 90
+    assert blend_with_shape_score(84.8, fat) == pytest.approx(84.8 * (1 - 0.15 * (1 - fat["score"] / 100)))
+    # symmetric mode never gives a bonus, even when configured
+    sym = MeshComplexityConfig(mode="symmetric", weight=0.15, bonus_weight=0.05)
+    sym.validate()
+    assert mesh_complexity(MeshStats(2304, 1200), MeshStats(576, 300), sym)["bonus_weight"] == 0.0
+    with pytest.raises(ConfigError):
+        config_from_dict({"mesh_complexity": {"mode": "bigger_is_better"}})

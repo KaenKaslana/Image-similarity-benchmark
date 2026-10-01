@@ -181,23 +181,35 @@ class MeshComplexityConfig:
     ``weight`` is the largest fraction of the shape score the face-count term
     can take away: ``overall = shape_score * (1 - weight * (1 - mesh_score / 100))``.
     0 (the default) only reports the counts. ``free_log2`` is the band of
-    ``|log2(candidate_faces / reference_faces)|`` that scores 100 and
-    ``zero_log2`` the distance at which the score reaches 0. Image-only
-    ``compare`` runs ignore this section.
+    ``log2(candidate_faces / reference_faces)`` that scores 100 and
+    ``zero_log2`` the distance at which the score reaches 0. ``mode``
+    ``fewer_is_better`` penalises only more faces and multiplies the score by
+    ``1 + bonus_weight * bonus`` for fewer faces (full bonus at ``bonus_log2``
+    below the reference, overall capped at 100); ``symmetric`` penalises both
+    directions alike. Image-only ``compare`` runs ignore this section.
     """
 
     weight: float = 0.0
     free_log2: float = 1.0
     zero_log2: float = 5.0
+    mode: str = "symmetric"
+    bonus_weight: float = 0.0
+    bonus_log2: float = 2.0
 
     def validate(self) -> None:
-        for name in ("weight", "free_log2", "zero_log2"):
+        for name in ("weight", "free_log2", "zero_log2", "bonus_weight", "bonus_log2"):
             v = getattr(self, name)
             if isinstance(v, bool) or not isinstance(v, (int, float)):
                 raise ConfigError(f"mesh_complexity.{name} must be a number, got {v!r}")
             setattr(self, name, float(v))
+        if self.mode not in ("fewer_is_better", "symmetric"):
+            raise ConfigError(f"mesh_complexity.mode must be 'fewer_is_better' or 'symmetric', got {self.mode!r}")
         if not 0.0 <= self.weight <= 1.0:
             raise ConfigError(f"mesh_complexity.weight must be in [0, 1], got {self.weight}")
+        if not 0.0 <= self.bonus_weight <= 1.0:
+            raise ConfigError(f"mesh_complexity.bonus_weight must be in [0, 1], got {self.bonus_weight}")
+        if self.bonus_log2 < 0:
+            raise ConfigError("mesh_complexity.bonus_log2 must be >= 0")
         if self.free_log2 < 0:
             raise ConfigError(f"mesh_complexity.free_log2 must be >= 0, got {self.free_log2}")
         if self.zero_log2 <= self.free_log2:

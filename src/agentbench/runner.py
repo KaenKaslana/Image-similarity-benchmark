@@ -104,8 +104,8 @@ so make reasonable decisions yourself and keep working until the model is finish
 Goal: build a 3D model that matches the task description and the reference images as closely as possible \
 (overall shape, proportions, parts and their placement). The model is scored automatically: six orthographic \
 views of your model (front, back, both sides, top, bottom) are rendered and their silhouettes and edges are \
-compared with those of a hidden reference model. Colours, materials and textures are not scored; a face count \
-far away from the reference costs a few points. Use +Y as up and make the front of the object face +Z \
+compared with those of a hidden reference model. Colours, materials and textures are not scored. Fewer faces are better: a lean mesh that matches \
+earns a small bonus, a mesh with many more faces than needed loses points, so do not over-subdivide. Use +Y as up and make the front of the object face +Z \
 (Blender: +Z up and -Y front; its glTF exporter converts this automatically).
 
 Workspace: {workspace}

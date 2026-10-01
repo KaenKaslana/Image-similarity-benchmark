@@ -84,16 +84,22 @@ view_power: 0.25
 # Face-count term (compare-models / reproduce only). The image metrics cannot
 # tell a 200-face blocky copy from a 200k-face replica of the same outline, so
 # the ratio candidate_faces / reference_faces (both triangulated by trimesh)
-# is scored on a log2 scale and applied as a penalty on the shape score:
-#   overall = shape_score * (1 - weight * (1 - mesh_score / 100))
-#   |log2 ratio| <= free_log2  -> mesh_score 100, overall = shape_score
-#   |log2 ratio| >= zero_log2  -> mesh_score 0,   overall = shape_score * (1 - weight)
-# i.e. a face count within a factor 2 costs nothing, a factor 32 either way
-# costs 15 %. weight 0 keeps the old overall_score and only reports the counts.
+# is scored on a log2 scale and applied on top of the shape score.
+# mode fewer_is_better: the shape score already says how well the model
+# matches, so among equally good models the leaner one wins.
+#   overall = shape_score * (1 - weight * (1 - mesh_score / 100)) * (1 + bonus_weight * bonus), capped at 100
+#   log2 ratio <= free_log2   -> mesh_score 100 (up to 2x the faces costs nothing)
+#   log2 ratio >= zero_log2   -> mesh_score 0   (32x the faces costs 15 %)
+#   fewer faces               -> bonus 0..1, full at 2**bonus_log2 fewer (a quarter): up to +5 %
+# mode symmetric penalises fewer faces exactly like more faces (no bonus).
+# weight 0 and bonus_weight 0 only report the counts.
 mesh_complexity:
+  mode: fewer_is_better
   weight: 0.15
   free_log2: 1.0
   zero_log2: 5.0
+  bonus_weight: 0.05
+  bonus_log2: 2.0
 
 # Rig / animation term (compare-models / reproduce; only when the REFERENCE is
 # rigged, i.e. a character / creature / machine with glTF skins). Reads the
