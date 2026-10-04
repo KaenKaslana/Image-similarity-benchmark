@@ -564,7 +564,8 @@ docker compose run --rm benchmark python -m src.agentbench run benchmarks/exampl
 ### 配置文件格式
 
 示例见 [benchmarks/example/](benchmarks/example/)：`mcp_blender.json`（Blender MCP + OpenAI 兼容接口）、
-`builtin_python.json`（本项目工具 + Claude）、`command_claude_code.json`（调用外部 agent 命令行）。
+`builtin_python.json`（本项目工具 + Claude）、`command_claude_code.json`（调用外部 agent 命令行）、
+`command_codex.json`（Codex CLI 自己连 Blender MCP 建模，runner 只负责出题和打分）。
 
 ```jsonc
 {
@@ -654,6 +655,10 @@ docker compose run --rm benchmark python -m src.agentbench run benchmarks/exampl
 * **`command`**：运行任意外部 agent（Claude Code、Codex CLI、同学自己写的脚本……）。runner 负责拼好提示词（含参考图片路径和输出路径）、
   通过占位符和环境变量（`OUTPUT_MODEL` `WORKSPACE` `LLM_BASE_URL` `LLM_API_KEY` `LLM_MODEL`，以及 `OPENAI_*` / `ANTHROPIC_*`）传进去，
   逐行记录 stdout / stderr（JSON 行会解析成结构化事件，例如 `--output-format stream-json`），结束后给它留下的模型打分。
+  命令列表里单独的 `"{images}"` 会展开成每张参考图一个参数（例如 Codex 的 `-i`）；stdin 接 /dev/null，agent 不会等人输入。
+  外部 agent 自己连 Blender 容器时（例如 `command_codex.json` 用 `-c mcp_servers.blender.url=...` 把 Blender MCP 交给 Codex），
+  配置里也写上 `runtime.mcp.workspace_path`，提示词就会同时给出容器内的导出路径。Codex 的 MCP 工具默认要人工审批，
+  示例用 `-c mcp_servers.blender.default_tools_approval_mode="approve"` 关掉审批，用 `disabled_tools` 屏蔽资产库和 AI 生成工具。
 
 ### 记录下来的东西
 
