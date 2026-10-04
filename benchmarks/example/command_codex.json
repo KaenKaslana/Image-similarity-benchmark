@@ -1,0 +1,57 @@
+{
+  "name": "mug-codex-blender",
+  "description": "Codex CLI (codex exec) driving the headless Blender container through its own MCP client; the runner fills in the prompt, attaches the reference images with -i, records the JSONL events and scores the exported model.",
+
+  "runtime": {
+    "type": "command",
+    "command": [
+      "codex", "exec", "{prompt}",
+      "--json", "--skip-git-repo-check",
+      "-C", "{workspace}",
+      "-s", "workspace-write",
+      "-c", "approval_policy=\"never\"",
+      "-c", "mcp_servers.blender.url=\"${MCP_URL:-http://localhost:8000/mcp}\"",
+      "-c", "mcp_servers.blender.default_tools_approval_mode=\"approve\"",
+      "-c", "mcp_servers.blender.disabled_tools=[\"get_polyhaven_categories\", \"search_polyhaven_assets\", \"get_polyhaven_asset_preview\", \"download_polyhaven_asset\", \"get_polyhaven_status\", \"set_texture\", \"get_hyper3d_status\", \"generate_hyper3d_model_via_text\", \"generate_hyper3d_model_via_images\", \"poll_rodin_job_status\", \"import_generated_asset\", \"get_sketchfab_status\", \"search_sketchfab_models\", \"get_sketchfab_model_preview\", \"download_sketchfab_model\", \"get_polypizza_status\", \"search_polypizza_models\", \"download_polypizza_model\", \"get_hunyuan3d_status\", \"generate_hunyuan3d_model\", \"poll_hunyuan_job_status\", \"import_generated_asset_hunyuan\", \"get_tripo_status\", \"generate_tripo_model\", \"poll_tripo_job_status\", \"import_generated_asset_tripo\", \"record_trajectory_feedback\"]",
+      "-m", "{model}",
+      "-o", "{output_dir}/last_message.md",
+      "-i", "{images}"
+    ],
+    "mcp": {
+      "url": "${MCP_URL:-http://localhost:8000/mcp}",
+      "workspace_path": "/app/workspaces/example"
+    },
+    "env": {}
+  },
+
+  "llm": {
+    "api_format": "openai_responses",
+    "base_url": "${LLM_BASE_URL:-https://api.openai.com/v1}",
+    "api_key": "${LLM_API_KEY}",
+    "model": "${LLM_MODEL:-gpt-6-luna}"
+  },
+
+  "workspace": {
+    "root": "../../workspaces/example",
+    "output_dir": "runs"
+  },
+
+  "limits": {
+    "timeout_seconds": 1800
+  },
+
+  "evaluation": {
+    "enabled": true,
+    "auto_orient": true,
+    "feedback_rounds": 1
+  },
+
+  "tasks": [
+    {
+      "id": "mug",
+      "prompt": "做一个马克杯的三维模型：圆柱形杯身，杯口敞开、杯壁有一定厚度，平底，侧面有一个 C 形把手。形状和比例以参考图片为准。用 blender MCP 服务器的工具建模：先 get_scene_info 并删掉默认物体，用 execute_blender_code 分步建模，用 get_viewport_screenshot 检查效果，最后用 export_scene 导出 glb。参考图片已作为附件给你，不需要用 shell 打开。",
+      "reference_images": ["refs/mug/*.png"],
+      "reference_model": "answers/mug.glb"
+    }
+  ]
+}

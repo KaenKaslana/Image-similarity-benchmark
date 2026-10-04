@@ -95,6 +95,8 @@ class Recorder:
 
 
 # ---------------------------------------------------------------------------
+COMMAND_LINE_LIMIT = 256 * 1024 * 1024  # longest stdout/stderr line accepted from an external agent command
+
 # Prompts (built in; the config only supplies the task prompt)
 # ---------------------------------------------------------------------------
 SYSTEM_PROMPT = """\
@@ -538,8 +540,15 @@ class TaskRunner:
     def _command_prompt(self, images: list[Path], extra: str = "") -> str:
         text = first_message(self.task, images, self.ctx, attach=False)[0]["text"].replace(
             "look at them with read_image", "open the image files")
+        m = self.cfg.runtime.mcp
+        mapping = ""
+        if m and m.workspace_path:
+            mapping = (f"- The Blender MCP server runs in a container where this workspace ({self.ctx.root}) is mounted "
+                       f"at {m.workspace_path}; when exporting from Blender write to "
+                       f"{mcp_path(self.cfg, self.ctx.output_model, self.ctx)} (the same file seen from the container).\n")
         return (f"{text}\n\nRequirements (automated, headless benchmark; nobody will answer questions):\n"
                 f"- Save the final model as ONE .glb file at: {self.ctx.output_model}\n"
+                + mapping +
                 f"- Use +Y as up and make the front of the object face +Z.\n"
                 f"- The model is scored by comparing six orthographic silhouettes with a hidden reference model.\n"
                 + (f"\n{extra}\n" if extra else ""))
@@ -577,7 +586,7 @@ class TaskRunner:
             cmd = self.cfg.runtime.command
             self.rec.event("user", content=[text_block(prompt)], attempt=attempt + 1)
             self.rec.md(f"## Prompt (attempt {attempt + 1})\n\n```text\n{prompt}\n```")
-            code = await self._exec(cmd, values, attempt + 1)
+            code = await self._exec(cmd, values, images, attempt + 1)
             self.out.turns += 1
             if code is None:
                 self.out.status = "timeout"
@@ -593,17 +602,24 @@ class TaskRunner:
                 extra = fb[0]["text"] + f"\nThe full evaluation report is {self.task_dir / ev['eval_dir'] / 'report.png'}."
         self.out.status = "completed"
 
-    async def _exec(self, cmd: list[str] | str, values: dict[str, str], attempt: int) -> int | None:
+    async def _exec(self, cmd: list[str] | str, values: dict[str, str], images: list[Path], attempt: int) -> int | None:
         env = self._command_env()
+        # stdin is closed: agent CLIs must not wait for a human (Codex reads a piped stdin as extra prompt).
+        # Agent CLIs emit single JSON lines holding whole screenshots (Codex --json), far above asyncio's 64 KiB default.
+        pipes = dict(cwd=self.ctx.root, env=env, stdin=asyncio.subprocess.DEVNULL, limit=COMMAND_LINE_LIMIT,
+                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         if isinstance(cmd, str):
             line = fill(cmd, values, quote=True)
-            proc = await asyncio.create_subprocess_shell(line, cwd=self.ctx.root, env=env,
-                                                         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            proc = await asyncio.create_subprocess_shell(line, **pipes)
             shown = line
         else:
-            argv = [fill(a, values) for a in cmd]
-            proc = await asyncio.create_subprocess_exec(*argv, cwd=self.ctx.root, env=env,
-                                                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            argv: list[str] = []
+            for a in cmd:
+                if a == "{images}":  # one argument per image, e.g. codex exec -i {images}
+                    argv.extend(str(p) for p in images)
+                else:
+                    argv.append(fill(a, values))
+            proc = await asyncio.create_subprocess_exec(*argv, **pipes)
             shown = shlex.join(argv)
         shown = shown.replace(values["prompt"], "<prompt>") if values["prompt"] else shown
         self.rec.event("command_start", command=shown, attempt=attempt)
@@ -638,6 +654,11 @@ class TaskRunner:
             await proc.wait()
             self.rec.event("stop", reason="timeout", attempt=attempt)
             return None
+        except BaseException:
+            if proc.returncode is None:  # never leave the agent running (and modelling) behind a failed run
+                proc.kill()
+                await proc.wait()
+            raise
         self.rec.event("command_end", exit_code=proc.returncode, attempt=attempt)
         tail = "\n".join(md_lines[-200:])
         self.rec.md(f"Exit code {proc.returncode}. Output (last lines; full output in stdout{suffix}.log):\n\n```text\n"

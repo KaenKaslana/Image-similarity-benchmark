@@ -386,6 +386,21 @@ def test_command_runtime(bench):
     assert "Save the final model" in (run_dir / "mug" / "prompt.md").read_text()
 
 
+def test_command_runtime_images_and_mcp_paths(bench):
+    _, write = bench
+    # "{images}" alone becomes one argument per reference image; very long output lines must not kill the run.
+    script = ("import sys, trimesh; imgs = sys.argv[2:]; assert all(i.endswith('.png') for i in imgs), imgs; "
+              "trimesh.creation.box().export(sys.argv[1]); print('x' * 200000); print('images', len(imgs))")
+    cfg = load_bench_config(write({"type": "command", "command": [sys.executable, "-c", script, "{output_model}", "{images}"],
+                                   "mcp": {"url": "http://blender:8000/mcp", "workspace_path": "/app/ws"}}))
+    run_dir, outcomes = asyncio.run(run_benchmark(cfg))
+    out = outcomes[0]
+    assert out.status == "completed" and out.score is not None
+    assert out.final_message.startswith("images ") and int(out.final_message.split()[1]) >= 1
+    prompt = (run_dir / "mug" / "prompt.md").read_text()
+    assert "mounted at /app/ws" in prompt and "/app/ws/runs/" in prompt and prompt.index("/app/ws/runs/") > prompt.index("ONE .glb")
+
+
 MCP_SERVER = textwrap.dedent("""
     import sys, trimesh
     from mcp.server.fastmcp import FastMCP, Image

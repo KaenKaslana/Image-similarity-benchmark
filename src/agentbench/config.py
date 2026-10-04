@@ -117,7 +117,10 @@ class RuntimeConfig:
       plus the host-side helper tools listed in ``tools``.
     * ``builtin``: only this project's own tools (files, Python with trimesh, renderer).
     * ``command``: run any other agent CLI; the runner only fills in the prompt and
-      paths, records its output and scores the model it leaves behind.
+      paths, records its output and scores the model it leaves behind. If that CLI
+      talks to the Blender container itself (e.g. Codex CLI with its own MCP config),
+      set ``mcp.workspace_path`` so the prompt also gives the export path as the
+      container sees it.
     """
 
     type: str = "mcp"
@@ -303,7 +306,7 @@ class BenchConfig:
             seen.add(t.id)
         if not self.workspace_root.is_dir():
             raise AgentConfigError(f"workspace.root does not exist: {self.workspace_root}")
-        if self.runtime.type == "mcp" and self.runtime.mcp.workspace_path:
+        if self.runtime.mcp and self.runtime.mcp.workspace_path:  # also for "command" agents that use the MCP server
             try:
                 self.output_root.relative_to(self.workspace_root)
             except ValueError:
