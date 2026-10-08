@@ -1,0 +1,21 @@
+{
+  "name": "image-similarity-benchmark",
+  "version": "0.1.0",
+  "description": "Node.js port of the image similarity benchmark scorer (SSIM, silhouette IoU, edge similarity; 3D model comparison)",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "imgsim": "bin/imgsim.js"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@jsquash/jpeg": "^1.6.0",
+    "js-yaml": "^5.4.3",
+    "pngjs": "^7.0.0"
+  }
+}

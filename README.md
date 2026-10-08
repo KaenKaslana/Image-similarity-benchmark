@@ -34,8 +34,9 @@ reference/top.png   <-> candidate/top.png
 11. [输出文件](#输出文件)
 12. [配置文件](#配置文件)
 13. [测试](#测试)
-14. [重要说明与局限性](#重要说明与局限性)
-15. [项目结构](#项目结构)
+14. [Node.js 版（无 LPIPS）](#nodejs-版无-lpips)
+15. [重要说明与局限性](#重要说明与局限性)
+16. [项目结构](#项目结构)
 
 ---
 
@@ -1004,6 +1005,42 @@ docker compose run --rm benchmark    # 跑 benchmark 测试
 
 ---
 
+## Node.js 版（无 LPIPS）
+
+`node/` 目录是**打分部分**的 Node.js 移植：不需要 Python、PyTorch、OpenCV，只需要 Node.js 18+。
+它提供 `compare`、`compare-pair`、`render-views`、`compare-models`、`rig-info` 五个命令，读取同一套
+`configs/*.yaml`，输出同样结构的 `metrics.json` / `metrics.csv`（报告改为 `report.html`，对比图是
+reference | candidate | 差异 的 PNG 条带）。Sketchfab 下载、AI 生成（`fetch-sketchfab` / `generate-model` /
+`reproduce`）和 agent 测评仍然只在 Python 版里。
+
+```bash
+cd node && npm install
+node bin/imgsim.js compare --reference ../data/reference --candidate ../data/candidate --output ../outputs
+node bin/imgsim.js compare-models --reference ../models/a.glb --candidate ../models/b.glb --auto-orient
+node bin/imgsim.js rig-info --model ../models/character.glb
+npm test
+```
+
+与 Python 版的差别：
+
+* **没有 LPIPS。** 配置里的 `weights.lpips`、`score_floors.lpips`、`metrics.lpips` 照常读取然后丢弃，
+  其余权重按比例重新归一化（`shape.yaml` 的 silhouette/edge/ssim = 0.45/0.25/0 变成 0.643/0.357/0）。
+  所以 Node 版的 `pair_score` / `overall_score` 和 Python 版**不相等**，但 SSIM、Silhouette IoU、Edge
+  三个原始指标逐对一致。
+* 其余步骤按位复现：PNG / JPEG 解码（JPEG 用 libjpeg-turbo 的 WebAssembly 版，与 Pillow 逐位一致）、
+  Pillow 的 Lanczos / 双线性缩放、`cv2.phaseCorrelate` 平移对齐、scikit-image 的 SSIM、OpenCV 的 Canny
+  与距离变换、numpy 光栅化六视图、glTF 骨骼 / 蒙皮 / 动画分析。在合成数据（PNG / JPEG）和 Sketchfab 模型上对拍：
+  预处理后的像素零差异，三个指标差异 < 1e-5，渲染图零像素差异，`rig-info` 输出一致。
+  例外是左右完全对称的物体：相位相关有两个等价的峰值（±dx），float32 的舍入决定选哪一个，
+  Node 和 Python 可能选到不同的一侧，这对该视角的 Edge 分数影响在 0.02 以内。
+* 唯一有意不同的地方：自动定向搜索里的低分辨率剪影统一用像素中心采样（Python 对大三角形用
+  `cv2.fillConvexPoly`），`auto_orient.mean_iou` 略有差别；测试里选出的朝向相同。
+* 网格格式支持 glb / gltf / obj / stl，不支持 Draco / meshopt 压缩；模型必须是本地文件。
+* 纯 JavaScript，没有 SIMD：21 对 512 px 图片约 15 s；六视图 + 自动定向的 `compare-models` 在 3 万 / 5 万面的
+  模型上约 11 s。
+
+---
+
 ## 重要说明与局限性
 
 请在解读分数时务必注意：
@@ -1062,6 +1099,7 @@ image_similarity_benchmark/
 │   ├── generate.py           Meshy / Tripo 图生 3D、文生 3D 客户端（创建任务、轮询、下载）
 │   ├── sketchfab.py          Sketchfab Data / Download API 客户端（下载 + 缓存）
 │   └── agentbench/           配置文件驱动的 agent 测评：config / llm（OpenAI 兼容、Claude）/ tools（本项目工具、MCP）/ runner
+├── node/                     打分部分的 Node.js 移植（无 LPIPS）：bin/imgsim.js 命令行，src/ 与 Python 模块一一对应，test/ 单元测试
 └── tests/
     ├── conftest.py
     ├── test_preprocessing.py

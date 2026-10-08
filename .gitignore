@@ -36,3 +36,6 @@ outputs/mcp_smoke.png
 
 # Agent benchmark runs (python -m src.agentbench)
 workspaces/*/runs/
+
+# Node.js port
+node/node_modules/
